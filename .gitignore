@@ -1,0 +1,101 @@
+# ------------------------
+# Misc / editor / system
+# ------------------------
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ / Android Studio
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# VS Code (optional)
+.vscode/
+
+# ------------------------
+# Flutter / Dart / Pub
+# ------------------------
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+coverage/
+pubspec.lock
+
+# ------------------------
+# Android / signing & local config (DO NOT commit)
+# ------------------------
+# local.properties contains sdk path etc
+**/android/local.properties
+# key.properties (local keystore config)
+android/key.properties
+# developer keystores
+**/*.jks
+**/*.keystore
+# gradle caches / local .gradle
+/android/.gradle
+/.gradle/
+
+# Android build output (IDE variants)
+android/app/debug
+android/app/profile
+android/app/release
+
+# Google / Firebase config (should be added per platform but not committed)
+google-services.json
+firebase-debug.*.json
+firebase_app_id.json
+
+# ------------------------
+# iOS / Xcode
+# ------------------------
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Pods/
+ios/.symlinks/
+ios/ServiceDefinitions.json
+xcuserdata/
+DerivedData/
+
+# ------------------------
+# Build artifacts / caching
+# ------------------------
+build/
+captures/
+flutter_*.png
+*.lock
+
+# Symbolication / obfuscation / maps
+app.*.symbols
+app.*.map.json
+
+# Crashlytics/Play files (optional)
+firebase_app_id.json
+
+# ------------------------
+# Secrets / env files
+# ------------------------
+.env
+.env.*
+secrets.json
+credentials.json
+key.properties
+
+# ------------------------
+# Optional: other generated / temp files
+# ------------------------
+.out/

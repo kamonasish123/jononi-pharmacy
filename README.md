@@ -53,7 +53,12 @@ The app is built with **Firebase** and follows clean UI and scalable architectur
 - **Platform:** Android (APK)
 
 ---
+## 📱 Live Demo
 
+Try the app directly in your web browser (no installation needed):
+
+👉 [Click here to launch the live demo](https://appetize.io/app/b_652fig6fnsis3u6jzbt3e6rm34)
+---
 ## 📦 APK
 
 A fresh production-ready APK is generated and tested.  

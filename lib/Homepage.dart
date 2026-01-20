@@ -1120,45 +1120,67 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// Robust search implementation:
+  /// - Run two queries in parallel:
+  ///   1) prefix query on `medicineNameLower` (fast and precise)
+  ///   2) recent documents ordered by `updatedAt` (to find docs that might be missing normalized fields)
+  /// - Merge results, dedupe, then apply the same "best per name" selection as before.
   Widget _buildMedicineSearchResults(String query) {
     final q = query.toLowerCase();
+    final col = FirebaseFirestore.instance.collection('medicines');
 
-    // Use a live stream ordered by medicineNameLower (normalized) so updates are visible and consistent.
-    // We'll filter client-side for case-insensitive prefix match, then
-    // group by medicineNameLower and keep the most appropriate doc per name.
-    final stream = FirebaseFirestore.instance
-        .collection('medicines')
-        .orderBy('medicineNameLower')
-        .limit(500)
-        .snapshots();
+    // Query A: prefix query using normalized field (this will find docs that have medicineNameLower)
+    final Query prefixQuery = col.orderBy('medicineNameLower').startAt([q]).endAt([q + '\uf8ff']).limit(500);
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: stream,
+    // Query B: recent docs ordered by updatedAt to catch docs lacking normalized fields
+    final Query recentQuery = col.orderBy('updatedAt', descending: true).limit(1000);
+
+    return FutureBuilder<List<QuerySnapshot>>(
+      future: Future.wait([prefixQuery.get(), recentQuery.get()]),
       builder: (context, snap) {
         if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-        final allDocs = snap.data?.docs ?? [];
-
-        // client-side filter (case-insensitive prefix) using normalized fields when available
-        final matching = allDocs.where((d) {
-          final data = d.data() as Map<String, dynamic>;
-          final nameLower = (data['medicineNameLower'] ?? (data['medicineName'] ?? '')).toString().toLowerCase();
-          return nameLower.startsWith(q);
-        }).toList();
-
-        if (matching.isEmpty) {
+        if (snap.hasError) {
+          debugPrint('search future error: ${snap.error}');
+          return const Center(child: Text('Search error', style: TextStyle(color: Colors.white70)));
+        }
+        final List<QuerySnapshot>? results = snap.data;
+        if (results == null || results.length < 2) {
           return const Center(child: Text('No medicines found', style: TextStyle(color: Colors.white70)));
         }
 
-        // Group by medicineNameLower and pick the best doc per name.
-        // Selection priority:
-        // 1) larger updatedAt/createdAt timestamp
-        // 2) if timestamps equal or missing, prefer the doc with larger quantity/stock
-        final Map<String, QueryDocumentSnapshot> bestByName = {};
-        for (final d in matching) {
-          final data = d.data() as Map<String, dynamic>;
-          final nameLower = (data['medicineNameLower'] ?? (data['medicineName'] ?? '')).toString().toLowerCase();
+        final QuerySnapshot prefixSnap = results[0];
+        final QuerySnapshot recentSnap = results[1];
 
-          // prefer updatedAt then createdAt
+        // Use a map to dedupe by document id
+        final Map<String, QueryDocumentSnapshot> byId = {};
+
+        // Add all prefix results first (these are exact server-side matches)
+        for (final d in prefixSnap.docs) {
+          byId[d.id] = d;
+        }
+
+        // For recent docs, include those that match the query by checking available name fields.
+        for (final d in recentSnap.docs) {
+          if (byId.containsKey(d.id)) continue; // already included
+          final data = d.data() as Map<String, dynamic>;
+          final nameLower = (data['medicineNameLower'] ?? data['medicineName'] ?? data['name'] ?? '').toString().toLowerCase();
+          if (nameLower.startsWith(q)) {
+            byId[d.id] = d;
+          }
+        }
+
+        if (byId.isEmpty) {
+          return const Center(child: Text('No medicines found', style: TextStyle(color: Colors.white70)));
+        }
+
+        // Now apply the same "best per normalized name" grouping logic as before.
+        final List<QueryDocumentSnapshot> allCandidates = byId.values.toList();
+
+        final Map<String, QueryDocumentSnapshot> bestByName = {};
+        for (final d in allCandidates) {
+          final data = d.data() as Map<String, dynamic>;
+          final nameLower = (data['medicineNameLower'] ?? data['medicineName'] ?? data['name'] ?? '').toString().toLowerCase();
+
           Timestamp? updated = (data['updatedAt'] as Timestamp?) ?? (data['createdAt'] as Timestamp?);
           final int ts = (updated?.millisecondsSinceEpoch ?? 0);
 
@@ -1173,7 +1195,6 @@ class _HomePageState extends State<HomePage> {
             if (ts > exTs) {
               bestByName[nameLower] = d;
             } else if (ts == exTs) {
-              // tie-breaker: prefer higher quantity/stock
               final currQtyRaw = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
               final existQtyRaw = existingData['quantity'] ?? existingData['stock'] ?? existingData['qty'] ?? 0;
               final int currQty = (currQtyRaw is num) ? currQtyRaw.toInt() : int.tryParse(currQtyRaw.toString()) ?? 0;
@@ -1182,11 +1203,10 @@ class _HomePageState extends State<HomePage> {
                 bestByName[nameLower] = d;
               }
             }
-            // else keep existing
           }
         }
 
-        final results = bestByName.values.toList()
+        final resultsList = bestByName.values.toList()
           ..sort((a, b) {
             final an = (a.data() as Map<String, dynamic>)['medicineName'] ?? '';
             final bn = (b.data() as Map<String, dynamic>)['medicineName'] ?? '';
@@ -1195,14 +1215,13 @@ class _HomePageState extends State<HomePage> {
 
         return ListView.separated(
           padding: const EdgeInsets.only(bottom: 120),
-          itemCount: results.length,
+          itemCount: resultsList.length,
           separatorBuilder: (_, __) => const Divider(color: Colors.white24),
           itemBuilder: (_, i) {
-            final d = results[i];
+            final d = resultsList[i];
             final data = d.data() as Map<String, dynamic>;
-            final name = (data['medicineName'] ?? data['medicineNameLower'] ?? '').toString();
+            final name = (data['medicineName'] ?? data['medicineNameLower'] ?? data['name'] ?? '').toString();
             final price = (data['price'] ?? 0).toString();
-            // prefer 'quantity' then 'stock' then 'qty'
             final stockVal = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
             final stock = (stockVal is num) ? stockVal.toString() : stockVal.toString();
             return Card(

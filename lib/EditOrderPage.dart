@@ -137,19 +137,23 @@ class _EditOrderPageState extends State<EditOrderPage> {
     }
   }
 
-  /// Improved search: use normalized field medicineNameLower for ordering/prefix,
-  /// fetch a reasonably large set and pick the most appropriate doc per medicine name.
-  /// Selection priority: prefer larger updatedAt; if equal or missing, prefer higher stock.
+  /// Robust search: fetch recent docs (ordered by updatedAt) so we also include docs
+  /// that don't have medicineNameLower, then client-filter and dedupe (pick best).
   Stream<List<QueryDocumentSnapshot>> searchMedicinesStream(String query) {
     final col = firestore.collection('medicines');
-    final base = col.orderBy('medicineNameLower').limit(500).snapshots();
+
+    // fetch by updatedAt (recent first) — this ensures docs missing medicineNameLower appear
+    final base = col.orderBy('updatedAt', descending: true).limit(800).snapshots();
+
     return base.map((snap) {
       final q = query.trim().toLowerCase();
       final docs = snap.docs;
       if (q.isEmpty) return docs;
+
+      // client-side prefix match using best-available name fields
       final filtered = docs.where((d) {
         final data = d.data() as Map<String, dynamic>;
-        final nameLower = (data['medicineNameLower'] ?? (data['medicineName'] ?? '')).toString().toLowerCase();
+        final nameLower = (data['medicineNameLower'] ?? data['medicineName'] ?? data['name'] ?? '').toString().toLowerCase();
         return nameLower.startsWith(q);
       }).toList();
 
@@ -157,7 +161,7 @@ class _EditOrderPageState extends State<EditOrderPage> {
       final Map<String, QueryDocumentSnapshot> bestByName = {};
       for (final d in filtered) {
         final data = d.data() as Map<String, dynamic>;
-        final nameLower = (data['medicineNameLower'] ?? (data['medicineName'] ?? '')).toString().toLowerCase();
+        final nameLower = (data['medicineNameLower'] ?? data['medicineName'] ?? data['name'] ?? '').toString().toLowerCase();
 
         // prefer updatedAt then createdAt
         Timestamp? updated = (data['updatedAt'] as Timestamp?) ?? (data['createdAt'] as Timestamp?);

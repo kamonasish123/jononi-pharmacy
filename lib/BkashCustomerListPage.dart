@@ -1,6 +1,8 @@
-// BkashCustomerListPage.dart
+﻿// BkashCustomerListPage.dart
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'BkashCustomerAccountPage.dart';
 
 class BkashCustomerListPage extends StatefulWidget {
@@ -13,6 +15,83 @@ class BkashCustomerListPage extends StatefulWidget {
 class _BkashCustomerListPageState extends State<BkashCustomerListPage> {
   final TextEditingController _searchController = TextEditingController();
   String searchText = "";
+  String _currentUserRole = 'seller';
+  static const Color _bgStart = Color(0xFF041A14);
+  static const Color _bgEnd = Color(0xFF0E5A42);
+  static const Color _accent = Color(0xFFFFD166);
+
+  ThemeData _dialogTheme(BuildContext context) {
+    final base = Theme.of(context);
+    return base.copyWith(
+      dialogBackgroundColor: _bgEnd,
+      colorScheme: base.colorScheme.copyWith(
+        surface: _bgEnd,
+        onSurface: Colors.white,
+        primary: _accent,
+      ),
+      textTheme: base.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white),
+      inputDecorationTheme: const InputDecorationTheme(
+        labelStyle: TextStyle(color: Colors.white70),
+        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white30)),
+        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
+      ),
+      dividerColor: Colors.white24,
+    );
+  }
+
+  String _initials(String name) {
+    final trimmed = name.trim();
+    if (trimmed.isEmpty) return '?';
+    final parts = trimmed.split(RegExp(r'\s+'));
+    if (parts.length == 1) return parts.first.substring(0, 1).toUpperCase();
+    final first = parts.first.isNotEmpty ? parts.first[0].toUpperCase() : '';
+    final last = parts.last.isNotEmpty ? parts.last[0].toUpperCase() : '';
+    return (first + last).isEmpty ? '?' : (first + last);
+  }
+
+  Widget _buildBackdrop() {
+    return Stack(
+      children: [
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_bgStart, _bgEnd],
+            ),
+          ),
+        ),
+        Positioned(
+          top: -120,
+          right: -80,
+          child: Container(
+            width: 240,
+            height: 240,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [_accent.withOpacity(0.35), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: -140,
+          left: -90,
+          child: Container(
+            width: 260,
+            height: 260,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [Colors.white.withOpacity(0.18), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   Stream<QuerySnapshot> _customersStream() {
     final col = FirebaseFirestore.instance.collection('bkash_customers');
@@ -33,48 +112,134 @@ class _BkashCustomerListPageState extends State<BkashCustomerListPage> {
 
     await showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Create Bkash Customer Account'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameC, decoration: const InputDecoration(labelText: 'Name *')),
-            TextField(controller: addressC, decoration: const InputDecoration(labelText: 'Address (optional)')),
+      builder: (_) => Theme(
+        data: _dialogTheme(context),
+        child: AlertDialog(
+          backgroundColor: _bgEnd,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: Colors.white24),
+          ),
+          title: const Text('Create Bkash Customer Account'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(controller: nameC, decoration: const InputDecoration(labelText: 'Name *')),
+              TextField(controller: addressC, decoration: const InputDecoration(labelText: 'Address (optional)')),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () async {
+                final name = nameC.text.trim();
+                final addr = addressC.text.trim();
+                if (name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Name is required')));
+                  return;
+                }
+
+                final col = FirebaseFirestore.instance.collection('bkash_customers');
+                final exists = await col.where('nameLower', isEqualTo: name.toLowerCase()).limit(1).get();
+                if (exists.docs.isNotEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account with this name already exists')));
+                  return;
+                }
+
+                await col.add({
+                  'name': name,
+                  'nameLower': name.toLowerCase(),
+                  'address': addr.isEmpty ? null : addr,
+                  'balance': 0.0,
+                  'createdAt': FieldValue.serverTimestamp(),
+                });
+
+                Navigator.pop(context);
+              },
+              child: const Text('Create'),
+            ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final name = nameC.text.trim();
-              final addr = addressC.text.trim();
-              if (name.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Name is required')));
-                return;
-              }
-
-              final col = FirebaseFirestore.instance.collection('bkash_customers');
-              final exists = await col.where('nameLower', isEqualTo: name.toLowerCase()).limit(1).get();
-              if (exists.docs.isNotEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Account with this name already exists')));
-                return;
-              }
-
-              await col.add({
-                'name': name,
-                'nameLower': name.toLowerCase(),
-                'address': addr.isEmpty ? null : addr,
-                'balance': 0.0,
-                'createdAt': FieldValue.serverTimestamp(),
-              });
-
-              Navigator.pop(context);
-            },
-            child: const Text('Create'),
-          ),
-        ],
       ),
     );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMyRole();
+  }
+
+  Future<void> _loadMyRole() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      if (doc.exists) {
+        final data = doc.data();
+        setState(() {
+          _currentUserRole = (data?['role'] ?? 'seller').toString();
+        });
+      }
+    } catch (_) {
+      // keep default role
+    }
+  }
+
+  String _normalizeRole(String? role) {
+    if (role == null) return '';
+    return role.toLowerCase().replaceAll(RegExp(r'[\s\-]+'), '_').trim();
+  }
+
+  bool get _isAdmin {
+    final nr = _normalizeRole(_currentUserRole);
+    return nr == 'admin';
+  }
+
+  Future<void> _deleteCustomer(String id, String name) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => Theme(
+        data: _dialogTheme(context),
+        child: AlertDialog(
+          backgroundColor: _bgEnd,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: Colors.white.withOpacity(0.12)),
+          ),
+          title: const Text('Delete customer?'),
+          content: Text('Delete "$name" and all its transactions? This cannot be undone.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
+          ],
+        ),
+      ),
+    );
+
+    if (ok != true) return;
+
+    try {
+      final custRef = FirebaseFirestore.instance.collection('bkash_customers').doc(id);
+      final txCol = custRef.collection('transactions');
+      final txSnap = await txCol.get();
+      const chunkSize = 400;
+      final refs = txSnap.docs.map((d) => d.reference).toList();
+      for (var i = 0; i < refs.length; i += chunkSize) {
+        final batch = FirebaseFirestore.instance.batch();
+        final end = (i + chunkSize) > refs.length ? refs.length : (i + chunkSize);
+        for (var j = i; j < end; j++) {
+          batch.delete(refs[j]);
+        }
+        await batch.commit();
+      }
+      await custRef.delete();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Customer deleted')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+    }
   }
 
   @override
@@ -83,84 +248,187 @@ class _BkashCustomerListPageState extends State<BkashCustomerListPage> {
     super.dispose();
   }
 
-  @override
+    @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF01684D),
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        centerTitle: true,
-        backgroundColor: const Color(0xFF01684D),
-        title: TextField(
-          controller: _searchController,
-          style: const TextStyle(color: Colors.white),
-          decoration: const InputDecoration(
-            hintText: 'Search by name',
-            hintStyle: TextStyle(color: Colors.white70),
-            border: InputBorder.none,
-            prefixIcon: Icon(Icons.search, color: Colors.white70),
-          ),
-          onChanged: (v) => setState(() => searchText = v),
+        title: const Text(
+          'Bkash Customers',
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.white),
         ),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
         actions: [
           IconButton(
-            icon: const Icon(Icons.add, color: Colors.white),
+            icon: const Icon(Icons.add),
             tooltip: 'Create account',
             onPressed: _createAccountDialog,
           ),
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        backgroundColor: Colors.yellow[700],
+        backgroundColor: _accent,
         child: const Icon(Icons.add, color: Colors.black),
         onPressed: _createAccountDialog,
       ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: _customersStream(),
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final docs = snap.data?.docs ?? [];
-          if (docs.isEmpty) {
-            return const Center(child: Text('No accounts found', style: TextStyle(color: Colors.white70)));
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            itemCount: docs.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 6),
-            itemBuilder: (_, i) {
-              final doc = docs[i];
-              final d = doc.data() as Map<String, dynamic>;
-              final name = (d['name'] ?? '').toString();
-              final address = d['address'] as String?;
-              final balance = (d['balance'] ?? 0);
-              final bal = (balance is num) ? (balance.toDouble()) : double.tryParse(balance.toString()) ?? 0.0;
-
-              return Card(
-                color: Colors.white.withOpacity(0.08),
-                margin: const EdgeInsets.symmetric(horizontal: 12),
-                child: ListTile(
-                  title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  subtitle: Text(address ?? 'No address', style: const TextStyle(color: Colors.white70)),
-                  trailing: Text('৳${bal.toStringAsFixed(2)}', style: TextStyle(color: bal >= 0 ? Colors.greenAccent : Colors.redAccent, fontWeight: FontWeight.bold)),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => BkashCustomerAccountPage(
-                          accountId: doc.id,
-                          accountData: d,
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white.withOpacity(0.18)),
+                        ),
+                        child: Row(
+                          children: [
+                            const SizedBox(width: 12),
+                            const Icon(Icons.search, color: Colors.white70),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: TextField(
+                                controller: _searchController,
+                                style: const TextStyle(color: Colors.white),
+                                decoration: const InputDecoration(
+                                  hintText: 'Search by name',
+                                  hintStyle: TextStyle(color: Colors.white54),
+                                  border: InputBorder.none,
+                                ),
+                                onChanged: (v) => setState(() => searchText = v),
+                              ),
+                            ),
+                            if (_searchController.text.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.clear, color: Colors.white70),
+                                onPressed: () => setState(() {
+                                  _searchController.clear();
+                                  searchText = '';
+                                }),
+                              ),
+                          ],
                         ),
                       ),
-                    );
-                  },
-                ),
-              );
-            },
-          );
-        },
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Accounts',
+                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 8),
+                  Expanded(
+                    child: StreamBuilder<QuerySnapshot>(
+                      stream: _customersStream(),
+                      builder: (context, snap) {
+                        if (snap.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator(color: Colors.white));
+                        }
+                        final docs = snap.data?.docs ?? [];
+                        if (docs.isEmpty) {
+                          return const Center(child: Text('No accounts found', style: TextStyle(color: Colors.white70)));
+                        }
+
+                        return ListView.separated(
+                          padding: const EdgeInsets.only(bottom: 120),
+                          itemCount: docs.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 6),
+                          itemBuilder: (_, i) {
+                            final doc = docs[i];
+                            final d = doc.data() as Map<String, dynamic>;
+                            final name = (d['name'] ?? '').toString();
+                            final address = d['address'] as String?;
+                            final balance = (d['balance'] ?? 0);
+                            final bal = (balance is num) ? (balance.toDouble()) : double.tryParse(balance.toString()) ?? 0.0;
+
+                            final addr = (address == null || address.trim().isEmpty) ? 'No address' : address.trim();
+                            final balColor = bal >= 0 ? Colors.greenAccent : Colors.redAccent;
+                            return Container(
+                              margin: const EdgeInsets.symmetric(vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.white.withOpacity(0.16)),
+                              ),
+                              child: ListTile(
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                leading: Container(
+                                  width: 42,
+                                  height: 42,
+                                  decoration: BoxDecoration(
+                                    color: _accent.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Text(
+                                    _initials(name),
+                                    style: const TextStyle(color: _accent, fontWeight: FontWeight.bold),
+                                  ),
+                                ),
+                                title: Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                subtitle: Text(addr, style: const TextStyle(color: Colors.white70)),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: balColor.withOpacity(0.18),
+                                        borderRadius: BorderRadius.circular(999),
+                                        border: Border.all(color: balColor.withOpacity(0.45)),
+                                      ),
+                                      child: Text(
+                                        "\u09F3${bal.toStringAsFixed(2)}",
+                                        style: TextStyle(color: balColor, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                    if (_isAdmin)
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                                        tooltip: 'Delete customer',
+                                        onPressed: () => _deleteCustomer(doc.id, name),
+                                      ),
+                                  ],
+                                ),
+                                onTap: () {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (_) => BkashCustomerAccountPage(
+                                        accountId: doc.id,
+                                        accountData: d,
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
+
+
+

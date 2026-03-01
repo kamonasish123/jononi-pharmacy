@@ -1,6 +1,8 @@
-// EditBillPage.dart
+﻿// EditBillPage.dart
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/services.dart';
 
 class EditBillPage extends StatefulWidget {
   final String date;
@@ -22,6 +24,78 @@ class _EditBillPageState extends State<EditBillPage> {
   late List<Map<String, dynamic>> originalItems; // keep original for diff
   late TextEditingController paidController;
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
+  static const Color _bgStart = Color(0xFF041A14);
+  static const Color _bgEnd = Color(0xFF0E5A42);
+  static const Color _accent = Color(0xFFFFD166);
+  double _round2(double v) => double.parse(v.toStringAsFixed(2));
+
+  ThemeData _dialogTheme(BuildContext context) {
+    final base = Theme.of(context);
+    return base.copyWith(
+      dialogBackgroundColor: _bgEnd,
+      colorScheme: base.colorScheme.copyWith(
+        surface: _bgEnd,
+        onSurface: Colors.white,
+        primary: _accent,
+      ),
+      textTheme: base.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white),
+      listTileTheme: const ListTileThemeData(
+        textColor: Colors.white,
+        iconColor: Colors.white70,
+      ),
+      iconTheme: const IconThemeData(color: Colors.white70),
+      inputDecorationTheme: const InputDecorationTheme(
+        labelStyle: TextStyle(color: Colors.white70),
+        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white30)),
+        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
+      ),
+      dividerColor: Colors.white24,
+    );
+  }
+
+  Widget _buildBackdrop() {
+    return Stack(
+      children: [
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_bgStart, _bgEnd],
+            ),
+          ),
+        ),
+        Positioned(
+          top: -120,
+          right: -80,
+          child: Container(
+            width: 240,
+            height: 240,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [_accent.withOpacity(0.35), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: -140,
+          left: -90,
+          child: Container(
+            width: 260,
+            height: 260,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [Colors.white.withOpacity(0.18), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   @override
   void initState() {
@@ -33,7 +107,22 @@ class _EditBillPageState extends State<EditBillPage> {
 
     items = originalItems.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e)).toList();
 
-    paidController = TextEditingController(text: (widget.billData['paid'] ?? 0).toString());
+    for (final it in originalItems) {
+      final qty = (it['qty'] ?? 0) is num ? (it['qty'] as num).toDouble() : double.tryParse(it['qty'].toString()) ?? 0.0;
+      final price = _round2((it['price'] ?? 0) is num ? (it['price'] as num).toDouble() : double.tryParse(it['price'].toString()) ?? 0.0);
+      it['price'] = price;
+      it['total'] = _round2(qty * price);
+    }
+    for (final it in items) {
+      final qty = (it['qty'] ?? 0) is num ? (it['qty'] as num).toDouble() : double.tryParse(it['qty'].toString()) ?? 0.0;
+      final price = _round2((it['price'] ?? 0) is num ? (it['price'] as num).toDouble() : double.tryParse(it['price'].toString()) ?? 0.0);
+      it['price'] = price;
+      it['total'] = _round2(qty * price);
+    }
+
+    paidController = TextEditingController(
+      text: _round2((widget.billData['paid'] ?? 0) is num ? (widget.billData['paid'] as num).toDouble() : double.tryParse((widget.billData['paid'] ?? 0).toString()) ?? 0.0).toStringAsFixed(2),
+    );
   }
 
   @override
@@ -42,11 +131,11 @@ class _EditBillPageState extends State<EditBillPage> {
     super.dispose();
   }
 
-  double get subTotal =>
-      items.fold(0.0, (sum, i) => sum + ((i['qty'] ?? 0) as num) * ((i['price'] ?? 0) as num));
+  double get subTotal => _round2(
+      items.fold(0.0, (sum, i) => sum + ((i['qty'] ?? 0) as num) * ((i['price'] ?? 0) as num)));
 
-  double get paid => double.tryParse(paidController.text) ?? 0;
-  double get due => subTotal - paid;
+  double get paid => _round2(double.tryParse(paidController.text) ?? 0.0);
+  double get due => _round2(subTotal - paid);
 
   String? _medIdOf(Map<String, dynamic> it) {
     if (it.containsKey('medicineId') && it['medicineId'] != null) return it['medicineId'].toString();
@@ -73,26 +162,37 @@ class _EditBillPageState extends State<EditBillPage> {
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(items[index]['name'] ?? ''),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: qtyController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: "Quantity"),
-            ),
-            TextField(
-              controller: priceController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: "Price"),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
+      builder: (_) => Theme(
+        data: _dialogTheme(context),
+        child: AlertDialog(
+          backgroundColor: _bgEnd,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: Colors.white.withOpacity(0.12)),
+          ),
+          title: Text(items[index]['name'] ?? ''),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: qtyController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: "Quantity"),
+              ),
+              TextField(
+                controller: priceController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [
+                  FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}$')),
+                ],
+                decoration: const InputDecoration(labelText: "Price"),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
               final qty = int.tryParse(qtyController.text);
               final price = double.tryParse(priceController.text);
 
@@ -135,10 +235,11 @@ class _EditBillPageState extends State<EditBillPage> {
                       ),
                     );
                     if (wantContinue == true) {
+                      final roundedPrice = _round2(price);
                       setState(() {
                         items[index]['qty'] = maxPossible;
-                        items[index]['price'] = price;
-                        items[index]['total'] = maxPossible * price;
+                        items[index]['price'] = roundedPrice;
+                        items[index]['total'] = _round2(maxPossible * roundedPrice);
                       });
                       Navigator.pop(context);
                     } else {
@@ -162,28 +263,30 @@ class _EditBillPageState extends State<EditBillPage> {
 
               // If here, either qty <= oldQty (returning stock) or qty increased and we had enough stock.
               setState(() {
+                final roundedPrice = _round2(price);
                 items[index]['qty'] = qty;
-                items[index]['price'] = price;
-                items[index]['total'] = qty * price;
+                items[index]['price'] = roundedPrice;
+                items[index]['total'] = _round2(qty * roundedPrice);
               });
 
               Navigator.pop(context);
             },
-            child: const Text("Update"),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                items.removeAt(index);
-              });
-              Navigator.pop(context);
-            },
-            child: const Text(
-              "Delete",
-              style: TextStyle(color: Colors.red),
+              child: const Text("Update"),
             ),
-          ),
-        ],
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  items.removeAt(index);
+                });
+                Navigator.pop(context);
+              },
+              child: const Text(
+                "Delete",
+                style: TextStyle(color: Colors.red),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -314,59 +417,124 @@ class _EditBillPageState extends State<EditBillPage> {
     }
   }
 
-  @override
+    @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: const Text("Edit Bill"),
-        backgroundColor: Colors.green,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            Expanded(
-              child: ListView.builder(
-                itemCount: items.length,
-                itemBuilder: (_, index) {
-                  final item = items[index];
-                  return Card(
-                    child: ListTile(
-                      title: Text(item['name'] ?? ''),
-                      subtitle: Text(
-                          "${item['qty']} × ৳${item['price']} = ৳${(item['qty'] ?? 0) * (item['price'] ?? 0)}"),
-                      trailing: const Icon(Icons.edit),
-                      onTap: () => editItem(index),
-                    ),
-                  );
-                },
-              ),
-            ),
-            const Divider(),
-            Text("Total = ৳${subTotal.toStringAsFixed(2)}",
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-            TextField(
-              controller: paidController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: "Paid"),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 4),
-            Text("Due = ৳${due.toStringAsFixed(2)}",
-                style: TextStyle(
-                    color: due > 0 ? Colors.red : Colors.green)),
-            const SizedBox(height: 10),
-            ElevatedButton(
-              onPressed: saveChanges,
-              child: const Text("Save Changes"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.yellow[700],
-                foregroundColor: Colors.black,
-              ),
-            ),
-          ],
+        title: const Text(
+          "Edit Bill",
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.white),
         ),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    "Bill ID: ${widget.billId}",
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: items.isEmpty
+                        ? const Center(child: Text("No items", style: TextStyle(color: Colors.white70)))
+                        : ListView.builder(
+                            itemCount: items.length,
+                            itemBuilder: (_, index) {
+                              final item = items[index];
+                              return Container(
+                                margin: const EdgeInsets.symmetric(vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.08),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: Colors.white.withOpacity(0.16)),
+                                ),
+                                child: ListTile(
+                                  title: Text(item['name'] ?? '', style: const TextStyle(color: Colors.white)),
+                                  /* subtitle: Text(
+                                    "${item['qty']} × ?${item['price']} = ?${(item['qty'] ?? 0) * (item['price'] ?? 0)}",
+                                    style: const TextStyle(color: Colors.white70),
+                                  ), */
+                                  subtitle: Text(
+                                    "${item['qty']} x \u09F3 ${((item['price'] ?? 0) as num).toDouble().toStringAsFixed(2)} = \u09F3 ${(((item['qty'] ?? 0) as num).toDouble() * ((item['price'] ?? 0) as num).toDouble()).toStringAsFixed(2)}",
+                                    style: const TextStyle(color: Colors.white70),
+                                  ),
+                                  trailing: const Icon(Icons.edit, color: Colors.white70),
+                                  onTap: () => editItem(index),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 10),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white.withOpacity(0.18)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text("Total = \u09F3 ${subTotal.toStringAsFixed(2)}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: paidController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}$')),
+                              ],
+                              style: const TextStyle(color: Colors.white),
+                              decoration: const InputDecoration(
+                                labelText: "Paid",
+                                labelStyle: TextStyle(color: Colors.white70),
+                                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white30)),
+                                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
+                              ),
+                              onChanged: (_) => setState(() {}),
+                            ),
+                            const SizedBox(height: 6),
+                            Text("Due = \u09F3 ${due.toStringAsFixed(2)}", style: TextStyle(color: due > 0 ? Colors.orangeAccent : Colors.greenAccent)),
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: saveChanges,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _accent,
+                                  foregroundColor: Colors.black,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                child: const Text("Save Changes"),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
+
+

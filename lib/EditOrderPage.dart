@@ -1,4 +1,5 @@
-// EditOrderPage.dart
+﻿// EditOrderPage.dart
+import 'dart:ui';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,6 +7,54 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
+
+const Color _bgStart = Color(0xFF041A14);
+const Color _bgEnd = Color(0xFF0E5A42);
+const Color _accent = Color(0xFFFFD166);
+
+Widget _buildBackdrop() {
+  return Stack(
+    children: [
+      Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [_bgStart, _bgEnd],
+          ),
+        ),
+      ),
+      Positioned(
+        top: -120,
+        right: -80,
+        child: Container(
+          width: 240,
+          height: 240,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [_accent.withOpacity(0.35), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        bottom: -140,
+        left: -90,
+        child: Container(
+          width: 260,
+          height: 260,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [Colors.white.withOpacity(0.18), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
 
 class EditOrderPage extends StatefulWidget {
   final String companyId;
@@ -142,7 +191,7 @@ class _EditOrderPageState extends State<EditOrderPage> {
   Stream<List<QueryDocumentSnapshot>> searchMedicinesStream(String query) {
     final col = firestore.collection('medicines');
 
-    // fetch by updatedAt (recent first) — this ensures docs missing medicineNameLower appear
+    // fetch by updatedAt (recent first) â€” this ensures docs missing medicineNameLower appear
     final base = col.orderBy('updatedAt', descending: true).limit(800).snapshots();
 
     return base.map((snap) {
@@ -441,16 +490,16 @@ class _EditOrderPageState extends State<EditOrderPage> {
                     final qty = item['qty'] ?? '';
                     final price = item['price'] ?? '';
                     final total = item['total'] ?? '';
-                    return pw.Text("$name $qty × ৳$price = ৳$total", style: pw.TextStyle(font: ttf, fontSize: 12));
+                    return pw.Text("$name $qty x \u09F3 $price = \u09F3 $total", style: pw.TextStyle(font: ttf, fontSize: 12));
                   })
                 else
                   pw.Text("No items", style: pw.TextStyle(font: ttf)),
                 pw.Divider(),
-                pw.Text("Total = ৳${orderData['subTotal'] ?? 0}", style: pw.TextStyle(font: ttf, fontWeight: pw.FontWeight.bold)),
-                pw.Text("Paid = ৳${orderData['paid'] ?? 0}", style: pw.TextStyle(font: ttf)),
+                pw.Text("Total = \u09F3 ${orderData['subTotal'] ?? 0}", style: pw.TextStyle(font: ttf, fontWeight: pw.FontWeight.bold)),
+                pw.Text("Paid = \u09F3 ${orderData['paid'] ?? 0}", style: pw.TextStyle(font: ttf)),
                 // <-- Added final amount line so PDF shows final amount
-                pw.Text("Final = ৳${finalAmtToShow.toStringAsFixed(2)}", style: pw.TextStyle(font: ttf)),
-                pw.Text("Due = ৳${orderData['due'] ?? 0}", style: pw.TextStyle(font: ttf)),
+                pw.Text("Final = \u09F3 ${finalAmtToShow.toStringAsFixed(2)}", style: pw.TextStyle(font: ttf)),
+                pw.Text("Due = \u09F3 ${orderData['due'] ?? 0}", style: pw.TextStyle(font: ttf)),
                 pw.SizedBox(height: 10),
                 pw.Text("${widget.companyName}", style: pw.TextStyle(font: ttf, fontStyle: pw.FontStyle.italic)),
               ],
@@ -467,215 +516,312 @@ class _EditOrderPageState extends State<EditOrderPage> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text("${widget.companyName} Order"),
-        backgroundColor: Colors.green,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            // 🔹 Search Medicine
-            TextField(
-              controller: searchController,
-              decoration: const InputDecoration(
-                labelText: "Search Medicine",
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-            if (searchController.text.isNotEmpty)
-              SizedBox(
-                height: 150,
-                child: StreamBuilder<List<QueryDocumentSnapshot>>(
-                  stream: searchMedicinesStream(searchController.text),
-                  builder: (_, snapshot) {
-                    if (!snapshot.hasData) return const Center(child: CircularProgressIndicator());
-                    final docs = snapshot.data!;
-                    if (docs.isEmpty) return const Center(child: Text('No medicines found'));
-                    // Grouping already handled in searchMedicinesStream; results are the best per name
-                    return ListView.builder(
-                      itemCount: docs.length,
-                      itemBuilder: (_, i) {
-                        final d = docs[i];
-                        final data = d.data() as Map<String, dynamic>;
-
-                        // <-- IMPORTANT: prefer 'quantity' first, then 'stock', then 'qty'
-                        final stockVal = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
-                        final stock = (stockVal is num) ? stockVal.toString() : stockVal.toString();
-
-                        final medName = (data['medicineName'] ?? data['medicineNameLower'] ?? '').toString();
-                        final price = ((data['price'] ?? 0) as num).toString();
-                        return ListTile(
-                          title: Text(medName),
-                          subtitle: Text('Price: ৳$price • Stock: $stock'),
-                          onTap: () async {
-                            // fetch latest snapshot for this medicine id to ensure current stock/price
-                            await _selectMedicineAndFetchLatest(d.id);
-                            // set search text to selected name for clarity
-                            searchController.text = medName;
-                            qtyController.clear();
-                            setState(() {});
-                          },
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-            if (selectedMedicine != null) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: qtyController,
-                      keyboardType: TextInputType.number,
-                      decoration: const InputDecoration(labelText: "Quantity"),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(onPressed: addToOrder, child: const Text("Add")),
-                ],
-              ),
-            ],
-
-            const SizedBox(height: 12),
-
-            // Discount controls
-            Row(
-              children: [
-                const Text("Discount:", style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(width: 8),
-                // SINGLE custom button (shows current percent). User taps to edit.
-                ElevatedButton(
-                  onPressed: _askCustomDiscount,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.grey[700],
-                    foregroundColor: Colors.white,
-                  ),
-                  child: Text("Custom (${discountPercent}%)"),
-                ),
-                const Spacer(),
-                Text("Applied: $discountPercent%", style: const TextStyle(color: Colors.white70)),
-              ],
-            ),
-
-            const SizedBox(height: 8),
-
-            // Final amount (editable)
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: finalAmountController,
-                    keyboardType: TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: "Final Amount"),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: paidController,
-                    keyboardType: TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(labelText: "Paid"),
-                    onChanged: (_) => setState(() {}),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 8),
-
-            // Due display
-            Row(
-              children: [
-                const Text("Due: ", style: TextStyle(fontWeight: FontWeight.bold)),
-                const SizedBox(width: 6),
-                Text(
-                  "৳${due.toStringAsFixed(2)}",
-                  style: TextStyle(color: due > 0 ? Colors.red : Colors.green, fontWeight: FontWeight.bold),
-                ),
-                const Spacer(),
-                ElevatedButton(
-                  onPressed: saveOrder,
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.yellow[700], foregroundColor: Colors.black),
-                  child: const Text("Save Order"),
-                ),
-              ],
-            ),
-
-            const Divider(),
-
-            // Items list with per-item Edit + Receive controls
-            Expanded(
-              child: items.isEmpty
-                  ? const Center(child: Text("No items", style: TextStyle(fontSize: 16)))
-                  : ListView.builder(
-                itemCount: items.length,
-                itemBuilder: (_, index) {
-                  final item = items[index];
-                  final bool received = (item['received'] ?? false) == true;
-                  final bool inProgress = _receivingInProgress.contains(index);
-
-                  Widget trailingWidget;
-                  if (received) {
-                    trailingWidget = const Text(
-                      'Received',
-                      style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
-                    );
-                  } else if (selectedItemIndex == index) {
-                    trailingWidget = Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.edit, color: Colors.blue),
-                          tooltip: 'Edit',
-                          onPressed: () => editItem(index),
-                        ),
-                        const SizedBox(width: 6),
-                        ElevatedButton(
-                          onPressed: inProgress ? null : () => _receiveItem(index),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                          child: inProgress
-                              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                              : const Text('Receive'),
-                        ),
-                      ],
-                    );
-                  } else {
-                    trailingWidget = const Icon(Icons.more_vert);
-                  }
-
-                  return Card(
-                    child: ListTile(
-                      title: Text(item['name'] ?? ''),
-                      subtitle: Text("${item['qty']} × ৳${item['price']} = ৳${(item['total']).toStringAsFixed(2)}"),
-                      trailing: trailingWidget,
-                      onTap: () {
-                        if (received) return;
-                        setState(() {
-                          selectedItemIndex = (selectedItemIndex == index) ? -1 : index;
-                        });
-                      },
-                      onLongPress: () {
-                        if (received) return;
-                        editItem(index);
-                      },
-                    ),
-                  );
-                },
-              ),
-            ),
-          ],
+  Widget _glassBox({required Widget child, EdgeInsets padding = const EdgeInsets.all(12)}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withOpacity(0.18)),
+          ),
+          child: child,
         ),
       ),
     );
   }
+
+  Widget _glassTextField({
+    TextEditingController? controller,
+    required String label,
+    TextInputType? keyboardType,
+    IconData? icon,
+    ValueChanged<String>? onChanged,
+  }) {
+    return _glassBox(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        onChanged: onChanged,
+        style: const TextStyle(color: Colors.white),
+        decoration: InputDecoration(
+          labelText: label,
+          labelStyle: const TextStyle(color: Colors.white70),
+          prefixIcon: icon != null ? Icon(icon, color: Colors.white) : null,
+          border: InputBorder.none,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        title: Text(
+          "${widget.companyName} Order",
+          style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+        ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  _glassTextField(
+                    controller: searchController,
+                    label: "Search Medicine",
+                    icon: Icons.search,
+                    onChanged: (_) => setState(() {}),
+                  ),
+                  if (searchController.text.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _glassBox(
+                      padding: EdgeInsets.zero,
+                      child: SizedBox(
+                        height: 150,
+                        child: StreamBuilder<List<QueryDocumentSnapshot>>(
+                          stream: searchMedicinesStream(searchController.text),
+                          builder: (_, snapshot) {
+                            if (!snapshot.hasData) {
+                              return const Center(child: CircularProgressIndicator(color: Colors.white));
+                            }
+                            final docs = snapshot.data!;
+                            if (docs.isEmpty) return const Center(child: Text('No medicines found', style: TextStyle(color: Colors.white70)));
+                            return ListView.builder(
+                              itemCount: docs.length,
+                              itemBuilder: (_, i) {
+                                final d = docs[i];
+                                final data = d.data() as Map<String, dynamic>;
+
+                                final stockVal = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
+                                final stock = (stockVal is num) ? stockVal.toString() : stockVal.toString();
+
+                                final medName = (data['medicineName'] ?? data['medicineNameLower'] ?? '').toString();
+                                final price = ((data['price'] ?? 0) as num).toString();
+                                return ListTile(
+                                  title: Text(medName, style: const TextStyle(color: Colors.white)),
+                                  subtitle: Text('Price: \\u09F3 $price | Stock: $stock', style: const TextStyle(color: Colors.white70)),
+                                  onTap: () async {
+                                    await _selectMedicineAndFetchLatest(d.id);
+                                    searchController.text = medName;
+                                    qtyController.clear();
+                                    setState(() {});
+                                  },
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                  if (selectedMedicine != null) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _glassTextField(
+                            controller: qtyController,
+                            label: "Quantity",
+                            keyboardType: TextInputType.number,
+                            onChanged: (_) => setState(() {}),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: addToOrder,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _accent,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text("Add"),
+                        ),
+                      ],
+                    ),
+                  ],
+
+                  const SizedBox(height: 12),
+
+                  _glassBox(
+                    child: Row(
+                      children: [
+                        const Text("Discount:", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: _askCustomDiscount,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _accent,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: Text("Custom (${discountPercent}%)"),
+                        ),
+                        const Spacer(),
+                        Text("Applied: $discountPercent%", style: const TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _glassTextField(
+                          controller: finalAmountController,
+                          label: "Final Amount",
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: _glassTextField(
+                          controller: paidController,
+                          label: "Paid",
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  _glassBox(
+                    child: Row(
+                      children: [
+                        const Text("Due:", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                        const SizedBox(width: 6),
+                        Text(
+                          "\u09F3 ${due.toStringAsFixed(2)}",
+                          style: TextStyle(
+                            color: due > 0 ? Colors.redAccent : Colors.greenAccent,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const Spacer(),
+                        ElevatedButton(
+                          onPressed: saveOrder,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _accent,
+                            foregroundColor: Colors.black,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          child: const Text("Save Order"),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  Expanded(
+                    child: items.isEmpty
+                        ? const Center(child: Text("No items", style: TextStyle(fontSize: 16, color: Colors.white70)))
+                        : ListView.builder(
+                            itemCount: items.length,
+                            itemBuilder: (_, index) {
+                              final item = items[index];
+                              final bool received = (item['received'] ?? false) == true;
+                              final bool inProgress = _receivingInProgress.contains(index);
+
+                              Widget trailingWidget;
+                              if (received) {
+                                trailingWidget = const Text(
+                                  'Received',
+                                  style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
+                                );
+                              } else if (selectedItemIndex == index) {
+                                trailingWidget = Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: const Icon(Icons.edit, color: Colors.lightBlueAccent),
+                                      tooltip: 'Edit',
+                                      onPressed: () => editItem(index),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    ElevatedButton(
+                                      onPressed: inProgress ? null : () => _receiveItem(index),
+                                      style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                                      child: inProgress
+                                          ? const SizedBox(
+                                              width: 16,
+                                              height: 16,
+                                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                            )
+                                          : const Text('Receive'),
+                                    ),
+                                  ],
+                                );
+                              } else {
+                                trailingWidget = const Icon(Icons.more_vert, color: Colors.white70);
+                              }
+
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 8),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: BackdropFilter(
+                                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.08),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(color: Colors.white.withOpacity(0.18)),
+                                      ),
+                                      child: ListTile(
+                                        title: Text(item['name'] ?? '', style: const TextStyle(color: Colors.white)),
+                                        subtitle: Text(
+                                          "${item['qty']} x \u09F3 ${item['price']} = \u09F3 ${(item['total']).toStringAsFixed(2)}",
+                                          style: const TextStyle(color: Colors.white70),
+                                        ),
+                                        trailing: trailingWidget,
+                                        onTap: () {
+                                          if (received) return;
+                                          setState(() {
+                                            selectedItemIndex = (selectedItemIndex == index) ? -1 : index;
+                                          });
+                                        },
+                                        onLongPress: () {
+                                          if (received) return;
+                                          editItem(index);
+                                        },
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+
+
+
+
+
+

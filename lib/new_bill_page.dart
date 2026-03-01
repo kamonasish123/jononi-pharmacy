@@ -1,6 +1,8 @@
+﻿import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter/services.dart';
 
 class NewBillPage extends StatefulWidget {
   final String date;
@@ -21,6 +23,54 @@ class _NewBillPageState extends State<NewBillPage> {
   List<Map<String, dynamic>> billItems = [];
   Map<String, dynamic>? selectedMedicine;
   String? selectedMedicineId;
+  static const Color _bgStart = Color(0xFF041A14);
+  static const Color _bgEnd = Color(0xFF0E5A42);
+  static const Color _accent = Color(0xFFFFD166);
+  double _round2(double v) => double.parse(v.toStringAsFixed(2));
+
+  Widget _buildBackdrop() {
+    return Stack(
+      children: [
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_bgStart, _bgEnd],
+            ),
+          ),
+        ),
+        Positioned(
+          top: -120,
+          right: -80,
+          child: Container(
+            width: 240,
+            height: 240,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [_accent.withOpacity(0.35), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: -140,
+          left: -90,
+          child: Container(
+            width: 260,
+            height: 260,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [Colors.white.withOpacity(0.18), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   // ---------- SEARCH ----------
   Stream<QuerySnapshot> searchMedicines(String query) {
@@ -47,10 +97,10 @@ class _NewBillPageState extends State<NewBillPage> {
 
   // ---------- CALCULATIONS ----------
   double get subTotal =>
-      billItems.fold(0.0, (sum, item) => sum + (item['total'] as num).toDouble());
+      _round2(billItems.fold(0.0, (sum, item) => sum + (item['total'] as num).toDouble()));
 
-  double get paid => double.tryParse(paidController.text) ?? 0.0;
-  double get due => subTotal - paid;
+  double get paid => _round2(double.tryParse(paidController.text) ?? 0.0);
+  double get due => _round2(subTotal - paid);
 
   // ---------- ADD ITEM ----------
   void addToBill() {
@@ -81,7 +131,7 @@ class _NewBillPageState extends State<NewBillPage> {
     }
 
     final rawPrice = selectedMedicine!['price'] ?? 0;
-    final double price = (rawPrice is num) ? rawPrice.toDouble() : double.tryParse(rawPrice.toString()) ?? 0.0;
+    final double price = _round2((rawPrice is num) ? rawPrice.toDouble() : double.tryParse(rawPrice.toString()) ?? 0.0);
 
     setState(() {
       billItems.add({
@@ -89,7 +139,7 @@ class _NewBillPageState extends State<NewBillPage> {
         'name': selectedMedicine!['medicineName'] ?? (selectedMedicine!['medicineNameLower'] ?? ''),
         'qty': qty,
         'price': price,
-        'total': qty * price,
+        'total': _round2(qty * price),
       });
 
       selectedMedicine = null;
@@ -133,171 +183,263 @@ class _NewBillPageState extends State<NewBillPage> {
     Navigator.pop(context);
   }
 
-  @override
+    @override
   Widget build(BuildContext context) {
     final timeString = DateFormat('hh:mm a').format(DateTime.now());
 
     return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        title: Text("New Bill - ${widget.date}"),
-        backgroundColor: Colors.green,
+        title: const Text(
+          "New Bill",
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700, color: Colors.white),
+        ),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            // Search medicine
-            TextField(
-              controller: searchController,
-              decoration: const InputDecoration(
-                labelText: "Search Medicine",
-                prefixIcon: Icon(Icons.search),
-                border: OutlineInputBorder(),
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-            const SizedBox(height: 6),
-
-            // Search results
-            if (searchController.text.isNotEmpty)
-              SizedBox(
-                height: 160,
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: searchMedicines(searchController.text),
-                  builder: (_, snapshot) {
-                    if (!snapshot.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    final docs = snapshot.data!.docs;
-                    return ListView.builder(
-                      itemCount: docs.length,
-                      itemBuilder: (_, i) {
-                        final data = docs[i].data() as Map<String, dynamic>;
-
-                        // tolerant parsing for stock and price
-                        final rawStock = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
-                        final int stock = (rawStock is num) ? rawStock.toInt() : int.tryParse(rawStock.toString()) ?? 0;
-                        final rawPrice = data['price'] ?? 0;
-                        final double price = (rawPrice is num) ? rawPrice.toDouble() : double.tryParse(rawPrice.toString()) ?? 0.0;
-
-                        final displayName = (data['medicineName'] ?? data['medicineNameLower'] ?? '').toString();
-
-                        return ListTile(
-                          title: Text(displayName),
-                          subtitle: Text("৳$price | Stock: $stock"),
-                          onTap: () {
-                            setState(() {
-                              selectedMedicine = data;
-                              selectedMedicineId = docs[i].id;
-                              searchController.text = displayName;
-                            });
-                          },
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-
-            // If query is empty, still show recent items so user can pick latest medicines
-            if (searchController.text.isEmpty)
-              SizedBox(
-                height: 160,
-                child: StreamBuilder<QuerySnapshot>(
-                  stream: searchMedicines(''),
-                  builder: (_, snapshot) {
-                    if (!snapshot.hasData) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    final docs = snapshot.data!.docs;
-                    return ListView.builder(
-                      itemCount: docs.length,
-                      itemBuilder: (_, i) {
-                        final data = docs[i].data() as Map<String, dynamic>;
-                        final rawStock = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
-                        final int stock = (rawStock is num) ? rawStock.toInt() : int.tryParse(rawStock.toString()) ?? 0;
-                        final rawPrice = data['price'] ?? 0;
-                        final double price = (rawPrice is num) ? rawPrice.toDouble() : double.tryParse(rawPrice.toString()) ?? 0.0;
-                        final displayName = (data['medicineName'] ?? data['medicineNameLower'] ?? '').toString();
-
-                        return ListTile(
-                          title: Text(displayName),
-                          subtitle: Text("৳$price | Stock: $stock"),
-                          onTap: () {
-                            setState(() {
-                              selectedMedicine = data;
-                              selectedMedicineId = docs[i].id;
-                              searchController.text = displayName;
-                            });
-                          },
-                        );
-                      },
-                    );
-                  },
-                ),
-              ),
-
-            // Quantity input
-            if (selectedMedicine != null) ...[
-              const SizedBox(height: 8),
-              Row(
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    child: TextField(
-                      controller: qtyController,
-                      keyboardType: TextInputType.number,
-                      decoration: InputDecoration(
-                        labelText:
-                        "Quantity (Stock: ${selectedMedicine!['quantity'] ?? selectedMedicine!['stock'] ?? 0})",
-                        border: const OutlineInputBorder(),
+                  Text(
+                    "Date: ${widget.date}",
+                    style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  ),
+                  const SizedBox(height: 10),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        height: 52,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white.withOpacity(0.18)),
+                        ),
+                        child: Row(
+                          children: [
+                            const SizedBox(width: 12),
+                            const Icon(Icons.search, color: Colors.white70),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: TextField(
+                                controller: searchController,
+                                style: const TextStyle(color: Colors.white, fontSize: 14),
+                                decoration: const InputDecoration(
+                                  hintText: "Search medicine",
+                                  hintStyle: TextStyle(color: Colors.white54),
+                                  border: InputBorder.none,
+                                ),
+                                onChanged: (_) => setState(() {}),
+                              ),
+                            ),
+                            if (searchController.text.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.clear, color: Colors.white70),
+                                onPressed: () => setState(() => searchController.clear()),
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(onPressed: addToBill, child: const Text("Add")),
+                  const SizedBox(height: 10),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        height: 160,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white.withOpacity(0.18)),
+                        ),
+                        child: StreamBuilder<QuerySnapshot>(
+                          stream: searchMedicines(searchController.text),
+                          builder: (_, snapshot) {
+                            if (!snapshot.hasData) {
+                              return const Center(child: CircularProgressIndicator(color: Colors.white));
+                            }
+                            final docs = snapshot.data!.docs;
+                            if (docs.isEmpty) {
+                              return const Center(child: Text("No medicines found", style: TextStyle(color: Colors.white70)));
+                            }
+                            return ListView.builder(
+                              itemCount: docs.length,
+                              itemBuilder: (_, i) {
+                                final data = docs[i].data() as Map<String, dynamic>;
+
+                                final rawStock = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
+                                final int stock = (rawStock is num) ? rawStock.toInt() : int.tryParse(rawStock.toString()) ?? 0;
+                                final rawPrice = data['price'] ?? 0;
+                                final double price = _round2((rawPrice is num) ? rawPrice.toDouble() : double.tryParse(rawPrice.toString()) ?? 0.0);
+
+                                final displayName = (data['medicineName'] ?? data['medicineNameLower'] ?? '').toString();
+
+                                return ListTile(
+                                  title: Text(displayName, style: const TextStyle(color: Colors.white)),
+                                  subtitle: Text("\u09F3 ${price.toStringAsFixed(2)} | Stock: $stock", style: const TextStyle(color: Colors.white70)),
+                                  onTap: () {
+                                    setState(() {
+                                      selectedMedicine = data;
+                                      selectedMedicineId = docs[i].id;
+                                      searchController.text = displayName;
+                                    });
+                                  },
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (selectedMedicine != null) ...[
+                    const SizedBox(height: 10),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(16),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: Colors.white.withOpacity(0.18)),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: qtyController,
+                                  keyboardType: TextInputType.number,
+                                  style: const TextStyle(color: Colors.white),
+                                  decoration: InputDecoration(
+                                    labelText: "Quantity (Stock: ${selectedMedicine!['quantity'] ?? selectedMedicine!['stock'] ?? 0})",
+                                    labelStyle: const TextStyle(color: Colors.white70),
+                                    border: const OutlineInputBorder(),
+                                    enabledBorder: OutlineInputBorder(
+                                      borderSide: BorderSide(color: Colors.white.withOpacity(0.3)),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    focusedBorder: OutlineInputBorder(
+                                      borderSide: const BorderSide(color: _accent, width: 1.4),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              ElevatedButton(
+                                onPressed: addToBill,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _accent,
+                                  foregroundColor: Colors.black,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                child: const Text("Add"),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Expanded(
+                    child: billItems.isEmpty
+                        ? const Center(child: Text("No items yet", style: TextStyle(color: Colors.white70)))
+                        : ListView.builder(
+                            itemCount: billItems.length,
+                            itemBuilder: (_, index) {
+                              final item = billItems[index];
+                              return Container(
+                                margin: const EdgeInsets.symmetric(vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Colors.white.withOpacity(0.08),
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: Colors.white.withOpacity(0.16)),
+                                ),
+                                child: ListTile(
+                                  title: Text(item['name'], style: const TextStyle(color: Colors.white)),
+                                  subtitle: Text("${item['qty']} × \u09F3 ${item['price']}", style: const TextStyle(color: Colors.white70)),
+                                  trailing: Text("\u09F3 ${item['total']}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                  const SizedBox(height: 10),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.08),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white.withOpacity(0.18)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text("Total = \u09F3 ${subTotal.toStringAsFixed(2)}", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 6),
+                            TextField(
+                              controller: paidController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}$')),
+                              ],
+                              style: const TextStyle(color: Colors.white),
+                              decoration: const InputDecoration(
+                                labelText: "Paid",
+                                labelStyle: TextStyle(color: Colors.white70),
+                                enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white30)),
+                                focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
+                              ),
+                              onChanged: (_) => setState(() {}),
+                            ),
+                            const SizedBox(height: 6),
+                            Text("Due = \u09F3 ${due.toStringAsFixed(2)}", style: TextStyle(color: due > 0 ? Colors.orangeAccent : Colors.greenAccent)),
+                            const SizedBox(height: 6),
+                            Text("Time: $timeString", style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                            const SizedBox(height: 10),
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton(
+                                onPressed: saveBill,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _accent,
+                                  foregroundColor: Colors.black,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                child: const Text("Save Bill"),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
-            ],
-
-            // Bill items list
-            Expanded(
-              child: ListView.builder(
-                itemCount: billItems.length,
-                itemBuilder: (_, index) {
-                  final item = billItems[index];
-                  return ListTile(
-                    title: Text(item['name']),
-                    subtitle: Text("${item['qty']} × ৳${item['price']}"),
-                    trailing: Text("৳${item['total']}"),
-                  );
-                },
-              ),
             ),
-
-            const Divider(),
-
-            // Total, Paid, Due
-            Text("Total = ৳${subTotal.toStringAsFixed(2)}", style: const TextStyle(fontWeight: FontWeight.bold)),
-            TextField(
-              controller: paidController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: "Paid"),
-            ),
-            Text("Due = ৳${due.toStringAsFixed(2)}", style: TextStyle(color: due > 0 ? Colors.red : Colors.green)),
-            const SizedBox(height: 6),
-            Text("Time: $timeString"),
-            const SizedBox(height: 8),
-            ElevatedButton(
-              onPressed: saveBill,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.yellow[700],
-                foregroundColor: Colors.black,
-              ),
-              child: const Text("Save Bill"),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 }
+
+
+

@@ -1,0 +1,2107 @@
+﻿// home_screen.dart
+import 'dart:async';
+import 'dart:io' show File;
+import 'dart:typed_data';
+import 'dart:ui';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:file_picker/file_picker.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'BkashCustomerListPage.dart';
+import 'PersonalPage.dart';
+import 'bkash_page.dart';
+
+import 'MedicineAdd.dart';
+import 'companylistpage.dart';
+import 'CustomerDueListPage.dart';
+import 'AdminPanelPage.dart';
+import 'ExchangeDetailPage.dart';
+import 'LowStockPage.dart';
+import 'SellPage.dart';
+import 'login_screen.dart';
+
+class HomePage extends StatefulWidget {
+  const HomePage({super.key});
+
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  // admin email used for the small approve-button (lowercased)
+  final String _adminEmail = 'rkamonasish@gmail.com';
+  static const Color _bgStart = Color(0xFF041A14);
+  static const Color _bgEnd = Color(0xFF0E5A42);
+  static const Color _accent = Color(0xFFFFD166);
+
+  ThemeData _dialogTheme(BuildContext context) {
+    final base = Theme.of(context);
+    return base.copyWith(
+      dialogBackgroundColor: _bgEnd,
+      colorScheme: base.colorScheme.copyWith(
+        surface: _bgEnd,
+        onSurface: Colors.white,
+        primary: _accent,
+      ),
+      textTheme: base.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white),
+      listTileTheme: const ListTileThemeData(
+        textColor: Colors.white,
+        iconColor: Colors.white70,
+      ),
+      iconTheme: const IconThemeData(color: Colors.white70),
+      inputDecorationTheme: const InputDecorationTheme(
+        labelStyle: TextStyle(color: Colors.white70),
+        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white30)),
+        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
+      ),
+      dividerColor: Colors.white24,
+    );
+  }
+
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final User? user = FirebaseAuth.instance.currentUser;
+
+  String? photoUrl;
+  String currentUserRole = "seller";
+
+  // subscription to users/{uid} doc to reflect role changes live
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _userSub;
+
+  // new: controller for top search bar
+  final TextEditingController topSearchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+
+    _startUserListener();
+    fetchCurrentUserRole();
+  }
+
+  @override
+  void dispose() {
+    topSearchController.dispose();
+    _userSub?.cancel();
+    super.dispose();
+  }
+
+  /// start listening to users/{uid} so role/photo updates are reflected immediately
+  void _startUserListener() {
+    if (user == null) return;
+    final docRef = FirebaseFirestore.instance.collection('users').doc(user!.uid);
+    _userSub?.cancel();
+    _userSub = docRef.snapshots().listen((snap) {
+      if (!mounted) return;
+      if (snap.exists) {
+        final m = snap.data();
+        setState(() {
+          // update role and photo if present in the doc
+          if (m != null && m['role'] != null) {
+            currentUserRole = m['role'].toString();
+          }
+          if (m != null && m['photoUrl'] != null) {
+            photoUrl = m['photoUrl'].toString();
+          }
+        });
+      }
+    }, onError: (e) {
+      debugPrint('user listener error: $e');
+    });
+  }
+
+  /// Load user photo from Firestore (one-time fallback; listener will update afterward)
+  Future<void> loadUserProfile() async {
+    if (user == null) return;
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection("users").doc(user!.uid).get();
+
+      if (doc.exists) {
+        setState(() {
+          photoUrl = doc.data()?["photoUrl"];
+        });
+      } else {
+        // If no doc, keep photoUrl null â€” user can set it via profile dialog
+      }
+    } catch (e) {
+      // keep default avatar if Firestore read fails
+      debugPrint('loadUserProfile error: $e');
+    }
+  }
+
+  /// Load current user role â€” if the users/{uid} doc is missing, create it
+  Future<void> fetchCurrentUserRole() async {
+    if (user == null) return;
+    final docRef = FirebaseFirestore.instance.collection('users').doc(user!.uid);
+
+    try {
+      final doc = await docRef.get();
+
+      if (doc.exists) {
+        final map = doc.data();
+        setState(() {
+          currentUserRole = (map?['role'] ?? 'seller').toString();
+          photoUrl = (map?['photoUrl'] ?? photoUrl)?.toString();
+        });
+      } else {
+        // create a users/{uid} doc for this auth user so role & rules work
+        const adminEmail = 'rkamonasish@gmail.com';
+        final role = (user!.email?.toLowerCase() == adminEmail) ? 'admin' : 'seller';
+
+        await docRef.set({
+          'email': user!.email ?? '',
+          'name': user!.displayName ?? '',
+          'role': role,
+          'photoUrl': photoUrl ?? '',
+          'approved': false, // NEW: require admin approval
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+
+        setState(() {
+          currentUserRole = role;
+        });
+
+        debugPrint('Created users/${user!.uid} with role $role');
+      }
+    } catch (e) {
+      // If anything fails, fallback to seller and keep app functional.
+      debugPrint('fetchCurrentUserRole error: $e');
+      setState(() {
+        currentUserRole = 'seller';
+      });
+    }
+  }
+
+  /// Normalize role strings to a canonical form:
+  /// - lowercased
+  /// - spaces/hyphens collapsed to underscores
+  /// This accepts "senior seller", "senior_seller", "Senior-Seller" equally.
+  String _normalizeRole(String? role) {
+    if (role == null) return '';
+    return role.toLowerCase().replaceAll(RegExp(r'[\s\-]+'), '_').trim();
+  }
+
+  /// helper: returns true if user is admin or manager
+  bool get _isAdminOrManager {
+    final nr = _normalizeRole(currentUserRole);
+    return nr == 'admin' || nr == 'manager';
+  }
+
+  /// helper: returns true for limited roles which must be blocked from certain pages
+  bool get _isLimitedRole {
+    final nr = _normalizeRole(currentUserRole);
+    return nr == 'assistant_manager' || nr == 'senior_seller' || nr == 'seller';
+  }
+
+  /// Access check helper for known page keys:
+  /// - 'bkash_customer' -> BkashCustomerListPage
+  /// - 'personal' -> PersonalPage
+  /// all other pages return true for the limited roles.
+  bool canAccess(String pageKey) {
+    if (_isAdminOrManager) return true; // full access
+    if (_isLimitedRole) {
+      // restricted for limited roles
+      if (pageKey == 'bkash_customer' || pageKey == 'personal') return false;
+      return true; // allowed for other pages
+    }
+    // default allow (if role unknown)
+    return true;
+  }
+
+  Future<void> _showAccessDeniedDialog(String title) async {
+    await showDialog(
+      context: context,
+      builder: (_) => Theme(
+        data: _dialogTheme(context),
+        child: AlertDialog(
+          backgroundColor: _bgEnd,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+            side: BorderSide(color: Colors.white.withOpacity(0.12)),
+          ),
+          title: const Text('Access denied'),
+          content: Text('You do not have permission to open "$title". Please ask an admin or manager.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBackdrop() {
+    return Stack(
+      children: [
+        Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [_bgStart, _bgEnd],
+            ),
+          ),
+        ),
+        Positioned(
+          top: -120,
+          right: -80,
+          child: Container(
+            width: 240,
+            height: 240,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [_accent.withValues(alpha: 0.35), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: -140,
+          left: -90,
+          child: Container(
+            width: 260,
+            height: 260,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              gradient: RadialGradient(
+                colors: [Colors.white.withValues(alpha: 0.18), Colors.transparent],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Random avatar (stable per user)
+  String randomAvatar(String uid) {
+    return "https://api.dicebear.com/7.x/personas/png?seed=$uid";
+  }
+
+  ImageProvider profileImage() {
+    if (photoUrl != null && photoUrl!.isNotEmpty) {
+      return NetworkImage(photoUrl!);
+    } else if (user != null) {
+      return NetworkImage(randomAvatar(user!.uid));
+    } else {
+      return const AssetImage('assets/default_avatar.png') as ImageProvider;
+    }
+  }
+
+  /// Open profile dialog where user can change name and photo
+  Future<void> _openProfileDialog() async {
+    if (user == null) return;
+
+    final usersRef = FirebaseFirestore.instance.collection('users').doc(user!.uid);
+    String initialName = user!.displayName ?? "Admin User";
+    // Attempt to read stored name from users doc as well
+    try {
+      final doc = await usersRef.get();
+      if (doc.exists) {
+        final map = doc.data();
+        if (map != null && (map['name'] as String?)?.isNotEmpty == true) {
+          initialName = map['name'];
+        }
+      }
+    } catch (_) {}
+
+    final nameController = TextEditingController(text: initialName);
+    String? localPreview = photoUrl;
+    bool uploading = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (context, setState) {
+          // -------------------- Cloudinary unsigned upload --------------------
+          // Cloudinary config: change upload preset name below to your unsigned preset name
+          const String _cloudName = 'dyvr2h7qc';
+          const String _uploadPreset = 'profile_unsigned'; // <- replace with your unsigned preset name
+
+          Future<void> pickAndUploadImage() async {
+            try {
+              setState(() => uploading = true);
+
+              if (kIsWeb) {
+                // Web: use file_picker to get bytes
+                final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true, allowMultiple: false);
+                if (result == null || result.files.isEmpty) {
+                  setState(() => uploading = false);
+                  return;
+                }
+                final platformFile = result.files.first;
+                final bytes = platformFile.bytes;
+                final filename = platformFile.name;
+
+                if (bytes == null) {
+                  setState(() => uploading = false);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Failed to read selected file.')));
+                  return;
+                }
+
+                final uri = Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/image/upload');
+                final request = http.MultipartRequest('POST', uri);
+                request.fields['upload_preset'] = _uploadPreset;
+                request.files.add(http.MultipartFile.fromBytes('file', bytes, filename: filename));
+
+                final streamedResponse = await request.send();
+                final resp = await http.Response.fromStream(streamedResponse);
+
+                if (resp.statusCode == 200) {
+                  final data = json.decode(resp.body) as Map<String, dynamic>;
+                  localPreview = data['secure_url'] as String?;
+                  setState(() => uploading = false);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Photo uploaded')));
+                } else {
+                  debugPrint('Cloudinary web upload failed: ${resp.statusCode} ${resp.body}');
+                  setState(() => uploading = false);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: ${resp.statusCode}')));
+                }
+              } else {
+                // Mobile: use image_picker and upload file path
+                final ImagePicker picker = ImagePicker();
+                final XFile? picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+                if (picked == null) {
+                  setState(() => uploading = false);
+                  return;
+                }
+
+                final file = File(picked.path);
+                final uri = Uri.parse('https://api.cloudinary.com/v1_1/$_cloudName/image/upload');
+                final request = http.MultipartRequest('POST', uri);
+                request.fields['upload_preset'] = _uploadPreset;
+                request.files.add(await http.MultipartFile.fromPath('file', file.path));
+
+                final streamedResponse = await request.send();
+                final resp = await http.Response.fromStream(streamedResponse);
+
+                if (resp.statusCode == 200) {
+                  final data = json.decode(resp.body) as Map<String, dynamic>;
+                  localPreview = data['secure_url'] as String?;
+                  setState(() => uploading = false);
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Photo uploaded')));
+                } else {
+                  debugPrint('Cloudinary mobile upload failed: ${resp.statusCode} ${resp.body}');
+                  setState(() => uploading = false);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Upload failed: ${resp.statusCode}')));
+                }
+              }
+            } catch (e, st) {
+              debugPrint('Cloudinary upload error: $e\n$st');
+              setState(() => uploading = false);
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Photo upload failed: $e")));
+            }
+          }
+          // -------------------- end Cloudinary upload --------------------
+
+          Future<void> setPhotoFromUrl() async {
+            final ctrl = TextEditingController(text: localPreview ?? '');
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (dialogCtx) {
+                return Theme(
+                  data: _dialogTheme(context),
+                  child: AlertDialog(
+                    backgroundColor: _bgEnd,
+                    surfaceTintColor: Colors.transparent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      side: BorderSide(color: Colors.white.withOpacity(0.12)),
+                    ),
+                    title: const Text('Photo URL'),
+                    content: TextField(
+                      controller: ctrl,
+                      decoration: InputDecoration(
+                        labelText: 'Image URL',
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: _accent),
+                        ),
+                      ),
+                    ),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(dialogCtx, false),
+                        child: const Text('Cancel'),
+                      ),
+                      ElevatedButton(
+                        onPressed: () => Navigator.pop(dialogCtx, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _accent,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        child: const Text('Set'),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            );
+
+            if (ok == true) {
+              final url = ctrl.text.trim();
+              if (url.isNotEmpty) {
+                setState(() => localPreview = url);
+              }
+            }
+          }
+
+          return Theme(
+            data: _dialogTheme(context),
+            child: AlertDialog(
+              backgroundColor: _bgEnd,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: BorderSide(color: Colors.white.withOpacity(0.12)),
+              ),
+              title: const Text('Profile'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(3),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: LinearGradient(
+                          colors: [
+                            _accent.withValues(alpha: 0.9),
+                            Colors.white.withValues(alpha: 0.2),
+                          ],
+                        ),
+                      ),
+                      child: CircleAvatar(
+                        radius: 40,
+                        backgroundImage: (localPreview != null && localPreview!.isNotEmpty) ? NetworkImage(localPreview!) : profileImage(),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: nameController,
+                      decoration: InputDecoration(
+                        labelText: 'Display name',
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+                        ),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: _accent),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.photo_camera),
+                            label: const Text('Pick photo'),
+                            onPressed: uploading ? null : () => pickAndUploadImage(),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              backgroundColor: const Color(0xFF0F3B2E),
+                              side: const BorderSide(color: Color(0xFF1E6A52)),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.link),
+                            label: const Text('Use URL'),
+                            onPressed: uploading ? null : () => setPhotoFromUrl(),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.white,
+                              backgroundColor: const Color(0xFF0F3B2E),
+                              side: const BorderSide(color: Color(0xFF1E6A52)),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (uploading) ...[
+                      const SizedBox(height: 12),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: const LinearProgressIndicator(
+                          minHeight: 6,
+                          backgroundColor: Colors.white12,
+                          valueColor: AlwaysStoppedAnimation<Color>(_accent),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text('Uploading photo...', style: TextStyle(color: Colors.white70)),
+                    ],
+                    const SizedBox(height: 10),
+                    const Text(
+                      'Tip: you can paste an image URL if device upload isn\'t available.',
+                      style: TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.white70,
+                  ),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    final newName = nameController.text.trim().isEmpty ? "Admin User" : nameController.text.trim();
+
+                    try {
+                      // Update FirebaseAuth displayName if different
+                      if ((user!.displayName ?? '') != newName) {
+                        await user!.updateDisplayName(newName);
+                      }
+
+                      final updateData = <String, dynamic>{
+                        'name': newName,
+                        'photoUrl': localPreview ?? '',
+                        'updatedAt': FieldValue.serverTimestamp(),
+                      };
+
+                      // ensure the users doc exists (merge)
+                      await usersRef.set(updateData, SetOptions(merge: true));
+
+                      // update local state
+                      setState(() {
+                        photoUrl = localPreview;
+                      });
+
+                      // listener will pick up doc changes; still call these to be safe
+                      await loadUserProfile();
+                      await fetchCurrentUserRole();
+
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Profile updated')));
+                    } catch (e) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to update profile: $e')));
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _accent,
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('Save'),
+                ),
+              ],
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  /// Toggle (or set) the `approved` flag for a user identified by email.
+  /// Returns a message describing result.
+  Future<String> _toggleApprovalForEmail(String targetEmail) async {
+    final firestore = FirebaseFirestore.instance;
+    final q = await firestore.collection('users').where('email', isEqualTo: targetEmail.toLowerCase()).limit(1).get();
+
+    if (q.docs.isEmpty) {
+      return 'No user found with email: $targetEmail';
+    }
+
+    final doc = q.docs.first;
+    final docRef = firestore.collection('users').doc(doc.id);
+    final data = doc.data();
+    final currently = (data['approved'] == true);
+
+    await docRef.set({'approved': !currently, 'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+    return 'User ${data['email'] ?? doc.id} approved=${!currently}';
+  }
+
+  /// Show a dialog (admin only) to enter an email and toggle approval
+  Future<void> _showApproveUserDialog() async {
+    final ctrl = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) {
+        bool loading = false;
+        return StatefulBuilder(builder: (c, setState) {
+          return AlertDialog(
+            title: const Text('Approve / Revoke user'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Enter user email to approve or revoke approval:'),
+                TextField(controller: ctrl, decoration: const InputDecoration(hintText: 'user@example.com')),
+                if (loading) const SizedBox(height: 12),
+                if (loading) const CircularProgressIndicator(),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: loading ? null : () async {
+                  final email = ctrl.text.trim().toLowerCase();
+                  if (email.isEmpty) return;
+                  setState(() => loading = true);
+                  try {
+                    final msg = await _toggleApprovalForEmail(email);
+                    Navigator.pop(ctx, msg);
+                  } catch (e) {
+                    Navigator.pop(ctx, 'Error: $e');
+                  }
+                },
+                child: const Text('Toggle'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+
+    if (result != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(result)));
+    }
+  }
+
+  /// Request approval (sets a timestamp field; admin can review)
+  Future<void> _requestApproval() async {
+    if (user == null) return;
+    final docRef = FirebaseFirestore.instance.collection('users').doc(user!.uid);
+    try {
+      await docRef.set({'approvalRequestedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Approval requested - admin will review.')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Request failed: $e')));
+    }
+  }
+
+  /// Open a dialog to pick or create a pharmacy, then navigate to ExchangeDetailPage
+  Future<void> openExchangePharmacyPicker(BuildContext context) async {
+    final firestore = FirebaseFirestore.instance;
+    final controller = TextEditingController();
+    bool creating = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (context, setState) {
+          // Query stream: if search text empty -> all; else prefix search on nameLower
+          Stream<QuerySnapshot> streamForQuery() {
+            final q = controller.text.trim().toLowerCase();
+            final col = firestore.collection('pharmacies');
+            if (q.isEmpty) {
+              return col.orderBy('nameLower').limit(200).snapshots();
+            } else {
+              return col
+                  .orderBy('nameLower')
+                  .startAt([q])
+                  .endAt([q + '\uf8ff'])
+                  .limit(200)
+                  .snapshots();
+            }
+          }
+
+          return Dialog(
+            backgroundColor: Colors.transparent,
+            insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(20),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.35),
+                        blurRadius: 24,
+                        offset: const Offset(0, 12),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 34,
+                              height: 34,
+                              decoration: BoxDecoration(
+                                color: _accent.withValues(alpha: 0.18),
+                                shape: BoxShape.circle,
+                                border: Border.all(color: _accent.withValues(alpha: 0.6)),
+                              ),
+                              child: const Icon(Icons.local_pharmacy, color: _accent, size: 18),
+                            ),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                "Select Pharmacy",
+                                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.close, color: Colors.white70),
+                              onPressed: () => Navigator.pop(context),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1, color: Colors.white12),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+                        child: TextField(
+                          controller: controller,
+                          decoration: InputDecoration(
+                            hintText: "Search or type a pharmacy name",
+                            hintStyle: const TextStyle(color: Colors.white54),
+                            prefixIcon: const Icon(Icons.search, color: Colors.white70),
+                            filled: true,
+                            fillColor: Colors.white.withValues(alpha: 0.08),
+                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.18)),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(14),
+                              borderSide: BorderSide(color: _accent.withValues(alpha: 0.8)),
+                            ),
+                          ),
+                          style: const TextStyle(color: Colors.white),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                      ),
+                      SizedBox(
+                        height: 280,
+                        child: StreamBuilder<QuerySnapshot>(
+                          stream: streamForQuery(),
+                          builder: (context, snapshot) {
+                            if (snapshot.connectionState == ConnectionState.waiting) {
+                              return const Center(child: CircularProgressIndicator());
+                            }
+                            final docs = snapshot.data?.docs ?? [];
+                            if (docs.isEmpty) {
+                              return Center(
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                                  child: Text(
+                                    controller.text.trim().isEmpty
+                                        ? "No pharmacies yet. Type a name above and press Create New."
+                                        : "No matches for \"${controller.text.trim()}\". You can create it.",
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(color: Colors.white70),
+                                  ),
+                                ),
+                              );
+                            }
+
+                            return ListView.separated(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                              itemCount: docs.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              itemBuilder: (_, i) {
+                                final d = docs[i];
+                                final data = d.data() as Map<String, dynamic>;
+                                final name = (data['name'] ?? '').toString();
+                                return InkWell(
+                                  borderRadius: BorderRadius.circular(14),
+                                  onTap: () {
+                                    Navigator.pop(context);
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (_) => ExchangeDetailPage(
+                                          pharmacyId: d.id,
+                                          pharmacyName: name,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                                    decoration: BoxDecoration(
+                                      color: Colors.white.withValues(alpha: 0.08),
+                                      borderRadius: BorderRadius.circular(14),
+                                      border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.storefront, color: Colors.white70, size: 18),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Text(
+                                            name,
+                                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        const Icon(Icons.chevron_right, color: Colors.white38),
+                                      ],
+                                    ),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                        child: Row(
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text("Close"),
+                            ),
+                            const Spacer(),
+                            ElevatedButton.icon(
+                              onPressed: creating
+                                  ? null
+                                  : () async {
+                                      final name = controller.text.trim();
+                                      if (name.isEmpty) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(content: Text("Type a pharmacy name to create.")),
+                                        );
+                                        return;
+                                      }
+
+                                      setState(() => creating = true);
+
+                                      try {
+                                        final nameLower = name.toLowerCase();
+                                        final existsQ = await firestore
+                                            .collection('pharmacies')
+                                            .where('nameLower', isEqualTo: nameLower)
+                                            .limit(1)
+                                            .get();
+
+                                        if (existsQ.docs.isNotEmpty) {
+                                          final doc = existsQ.docs.first;
+                                          Navigator.pop(context);
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => ExchangeDetailPage(
+                                                pharmacyId: doc.id,
+                                                pharmacyName: (doc.data() as Map<String, dynamic>)['name'] ?? name,
+                                              ),
+                                            ),
+                                          );
+                                        } else {
+                                          final newDocRef = await firestore.collection('pharmacies').add({
+                                            'name': name,
+                                            'nameLower': nameLower,
+                                            'totalDue': 0,
+                                            'createdAt': FieldValue.serverTimestamp(),
+                                          });
+
+                                          Navigator.pop(context);
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => ExchangeDetailPage(
+                                                pharmacyId: newDocRef.id,
+                                                pharmacyName: name,
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      } catch (e) {
+                                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+                                      } finally {
+                                        if (mounted) setState(() => creating = false);
+                                      }
+                                    },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _accent,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                              ),
+                              icon: creating
+                                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                                  : const Icon(Icons.add),
+                              label: const Text("Create New"),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // If no authenticated user, return original scaffold (shouldn't normally happen)
+    if (user == null) {
+      return Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: Colors.transparent,
+        body: Stack(
+          children: [
+            _buildBackdrop(),
+            const Center(child: Text('Not signed in', style: TextStyle(color: Colors.white))),
+          ],
+        ),
+      );
+    }
+
+    // Listen to live user doc so role changes reflect immediately
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance.collection('users').doc(user!.uid).snapshots(),
+      builder: (context, snap) {
+        // Defaults to current cached values (so we don't break behavior)
+        String liveRole = currentUserRole;
+        String? livePhoto = photoUrl;
+        bool liveApproved = true; // default to true if field not present (so existing users keep access)
+
+        if (snap.hasData && snap.data!.exists) {
+          final data = snap.data!.data();
+          if (data != null) {
+            if (data['role'] != null) liveRole = data['role'].toString();
+            if (data['photoUrl'] != null) livePhoto = data['photoUrl'].toString();
+            if (data.containsKey('approved')) liveApproved = (data['approved'] == true);
+          }
+        }
+
+        // If user is NOT approved, and is not admin/manager (and not the admin email),
+        // block the whole app and show an "Awaiting approval" page.
+        final normalized = _normalizeRole(liveRole);
+        final isAdminOrManager = (normalized == 'admin' || normalized == 'manager') || (user?.email?.toLowerCase() == _adminEmail);
+
+        if (!liveApproved && !isAdminOrManager) {
+          // Blocked UI
+          return Scaffold(
+            key: _scaffoldKey,
+            backgroundColor: Colors.transparent,
+            extendBodyBehindAppBar: true,
+            appBar: AppBar(
+              systemOverlayStyle: SystemUiOverlayStyle.light,
+              centerTitle: true,
+              elevation: 0,
+              backgroundColor: Colors.transparent,
+              title: const Text("Awaiting Approval"),
+            ),
+            body: Stack(
+              children: [
+                _buildBackdrop(),
+                SafeArea(
+                  child: Center(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(20),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                          child: Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(20),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
+                            ),
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Container(
+                                  width: 72,
+                                  height: 72,
+                                  decoration: BoxDecoration(
+                                    color: _accent.withValues(alpha: 0.18),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(Icons.hourglass_top, size: 36, color: Colors.white),
+                                ),
+                                const SizedBox(height: 16),
+                                const Text(
+                                  "Your account is awaiting admin approval.",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                ),
+                                const SizedBox(height: 10),
+                                const Text(
+                                  "An administrator must approve your account before you can use the app. "
+                                      "You will not be able to navigate to other pages until approval.",
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: Colors.white70),
+                                ),
+                                const SizedBox(height: 18),
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: ElevatedButton.icon(
+                                    icon: const Icon(Icons.refresh),
+                                    label: const Text("Request approval"),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: _accent,
+                                      foregroundColor: Colors.black,
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                    ),
+                                    onPressed: _requestApproval,
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                TextButton(
+                                  onPressed: () async {
+                                    await FirebaseAuth.instance.signOut();
+                                    Navigator.of(context).pushAndRemoveUntil(
+                                      MaterialPageRoute(builder: (_) => LoginPage()),
+                                          (route) => false,
+                                    );
+                                  },
+                                  child: const Text("Logout", style: TextStyle(color: Colors.white70)),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  "If you think this is a mistake contact: $_adminEmail",
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.white60, fontSize: 12),
+                                )
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        // local access checker using liveRole & liveApproved
+        bool localCanAccess(String pageKey) {
+          if (!liveApproved) return false; // optional: require 'approved' true if present
+          final nr = _normalizeRole(liveRole);
+          if (nr == 'admin' || nr == 'manager') return true;
+          if (nr == 'assistant_manager' || nr == 'senior_seller' || nr == 'seller') {
+            if (pageKey == 'bkash_customer' || pageKey == 'personal') return false;
+            return true;
+          }
+          return true;
+        }
+
+        // use livePhoto for drawer/profile avatar (if available), else fallback to profileImage()
+        final avatarImage = (livePhoto != null && livePhoto.isNotEmpty) ? NetworkImage(livePhoto) : profileImage();
+
+        // Build UI (modernized)
+        return Scaffold(
+          key: _scaffoldKey,
+          backgroundColor: Colors.transparent,
+          extendBodyBehindAppBar: true,
+
+          /// Drawer
+          drawer: Drawer(
+            backgroundColor: const Color(0xFF0B2F24),
+            child: ListView(
+              padding: EdgeInsets.zero,
+              children: [
+                UserAccountsDrawerHeader(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [_bgStart, _bgEnd],
+                    ),
+                  ),
+                  currentAccountPicture: CircleAvatar(
+                    backgroundImage: avatarImage,
+                  ),
+                  accountName: Text(
+                    user?.displayName ?? "User Name",
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white),
+                  ),
+                  accountEmail: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        user?.email ?? "",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        "ROLE: ${liveRole.toUpperCase()}",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(color: Colors.white60, fontSize: 11, letterSpacing: 0.3),
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Main user options
+                // Profile now opens profile dialog
+                drawerItem(Icons.person, "Profile", () {
+                  Navigator.pop(context); // close drawer
+                  _openProfileDialog();
+                }),
+                drawerItem(Icons.settings, "Settings"),
+                drawerItem(Icons.help, "Help"),
+                const Divider(color: Colors.white24),
+
+                // Admin Panel Section
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Text(
+                    "Admin Panel",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
+                drawerItem(Icons.dashboard, "Admin Panel", () {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const AdminPanelPage()));
+                }),
+                drawerItem(Icons.medical_services, "Medicine Control", () {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => MedicineAddPage()));
+                }),
+                drawerItem(Icons.report, "Reports"),
+                const Divider(color: Colors.white24),
+
+                // Developer Details Section
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                  child: Text(
+                    "Developer Details",
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
+                drawerItem(Icons.person, "Developer Details", () {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const DeveloperDetailsPage()));
+                }),
+                const Divider(color: Colors.white24),
+
+                // Logout
+                drawerItem(Icons.logout, "Logout", () async {
+                  // Close drawer first
+                  Navigator.pop(context);
+
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (dialogContext) => Theme(
+                      data: _dialogTheme(context),
+                      child: AlertDialog(
+                        backgroundColor: _bgEnd,
+                        surfaceTintColor: Colors.transparent,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(18),
+                          side: BorderSide(color: Colors.white.withOpacity(0.12)),
+                        ),
+                        title: const Text('Logout'),
+                        content: const Text('Are you sure you want to logout?'),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(dialogContext, false),
+                            child: const Text('Cancel'),
+                          ),
+                          ElevatedButton(
+                            onPressed: () => Navigator.pop(dialogContext, true),
+                            child: const Text('Logout'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+
+                  if (confirmed != true) return;
+
+                  await FirebaseAuth.instance.signOut();
+
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => LoginPage()),
+                        (route) => false,
+                  );
+                })
+              ],
+            ),
+          ),
+
+          /// AppBar
+          appBar: AppBar(
+            systemOverlayStyle: SystemUiOverlayStyle.light,
+            elevation: 0,
+            backgroundColor: Colors.transparent,
+            centerTitle: false,
+            toolbarHeight: 70,
+            titleSpacing: 0,
+
+            // Profile (left)
+            leading: InkWell(
+              onTap: () {
+                _scaffoldKey.currentState!.openDrawer();
+              },
+              child: Padding(
+                padding: const EdgeInsets.all(10),
+                child: Container(
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: _accent.withValues(alpha: 0.55)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _accent.withValues(alpha: 0.18),
+                        blurRadius: 12,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: CircleAvatar(
+                    backgroundImage: avatarImage,
+                  ),
+                ),
+              ),
+            ),
+
+            title: Text.rich(
+              TextSpan(
+                children: [
+                  const TextSpan(
+                    text: "Jononi",
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                      letterSpacing: 0.2,
+                    ),
+                  ),
+                  TextSpan(
+                    text: " Pharmacy",
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w600,
+                      color: _accent,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(right: 14),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        _accent.withValues(alpha: 0.18),
+                        Colors.white.withValues(alpha: 0.06),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _accent.withValues(alpha: 0.35)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: BoxDecoration(
+                          color: _accent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        liveRole.toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          /// Body
+          body: Stack(
+            children: [
+              _buildBackdrop(),
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 6),
+                      // Removed "Dashboard" title per request.
+                      // Removed subtitle text per request.
+                      const SizedBox(height: 12),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(16),
+                        child: BackdropFilter(
+                          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                          child: Container(
+                            height: 54,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [
+                                  Colors.white.withValues(alpha: 0.14),
+                                  Colors.white.withValues(alpha: 0.06),
+                                ],
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.25),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 8),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              children: [
+                                const SizedBox(width: 12),
+                                Icon(Icons.search, color: _accent.withValues(alpha: 0.9)),
+                                const SizedBox(width: 6),
+                                Expanded(
+                                  child: TextField(
+                                    controller: topSearchController,
+                                    style: const TextStyle(color: Colors.white, fontSize: 14),
+                                    decoration: const InputDecoration(
+                                      hintText: "Search medicine name, price, stock...",
+                                      hintStyle: TextStyle(color: Colors.white54),
+                                      border: InputBorder.none,
+                                    ),
+                                    onChanged: (_) => setState(() {}),
+                                  ),
+                                ),
+                                if (topSearchController.text.isNotEmpty)
+                                  IconButton(
+                                    icon: const Icon(Icons.clear, color: Colors.white70),
+                                    onPressed: () => setState(() => topSearchController.clear()),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 40),
+                      // Removed "Quick Actions" label per request.
+
+                      // If search text is non-empty, show medicine search results (name, price, stock).
+                      // Otherwise show the original Menu Grid (unchanged).
+                      Expanded(
+                        child: topSearchController.text.trim().isNotEmpty
+                            ? _buildMedicineSearchResults(topSearchController.text.trim())
+                            : GridView.count(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          primary: false,
+                          crossAxisCount: 3,
+                          mainAxisSpacing: 12,
+                          crossAxisSpacing: 10,
+                          childAspectRatio: 0.95,
+                          children: [
+                            // Sell
+                            InkWell(
+                              onTap: () {
+                                if (!localCanAccess('sell')) {
+                                  _showAccessDeniedDialog('Sell');
+                                  return;
+                                }
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => const SellPage()));
+                              },
+                              child: const MenuCard(Icons.shopping_cart, "Sell"),
+                            ),
+
+                            // bKash (main page, allowed for all)
+                            InkWell(
+                              onTap: () {
+                                if (!localCanAccess('bkash')) {
+                                  _showAccessDeniedDialog('bKash');
+                                  return;
+                                }
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => const BkashPage()));
+                              },
+                              child: const MenuCard(Icons.account_balance_wallet, "bKash"),
+                            ),
+
+                            // Due List
+                            InkWell(
+                              onTap: () {
+                                if (!localCanAccess('due_list')) {
+                                  _showAccessDeniedDialog('Due List');
+                                  return;
+                                }
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => const CustomerDueListPage()));
+                              },
+                              child: const MenuCard(Icons.list_alt, "Due List"),
+                            ),
+
+                            // Add Medicine
+                            InkWell(
+                              onTap: () {
+                                if (!localCanAccess('add_medicine')) {
+                                  _showAccessDeniedDialog('Add Medicine');
+                                  return;
+                                }
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => MedicineAddPage()));
+                              },
+                              child: const MenuCard(Icons.add_box, "Add Medicine"),
+                            ),
+
+                            // Order List
+                            InkWell(
+                              onTap: () {
+                                if (!localCanAccess('order_list')) {
+                                  _showAccessDeniedDialog('Order List');
+                                  return;
+                                }
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => const CompanyListPage()));
+                              },
+                              child: const MenuCard(Icons.inventory, "Order List"),
+                            ),
+
+                            // Low Item
+                            InkWell(
+                              onTap: () {
+                                if (!localCanAccess('low_item')) {
+                                  _showAccessDeniedDialog('Low Item');
+                                  return;
+                                }
+                                Navigator.push(context, MaterialPageRoute(builder: (_) => const LowStockPage()));
+                              },
+                              child: const MenuCard(Icons.warning, "Low Item"),
+                            ),
+
+                            // Borrow Item (Exchange)
+                            InkWell(
+                              onTap: () {
+                                if (!localCanAccess('borrow_item')) {
+                                  _showAccessDeniedDialog('Borrow Item');
+                                  return;
+                                }
+                                openExchangePharmacyPicker(context);
+                              },
+                              child: const MenuCard(Icons.handshake, "Borrow Item"),
+                            ),
+
+                            // Bkash Customer (RESTRICTED)
+                            Builder(builder: (ctx) {
+                              final allowed = localCanAccess('bkash_customer');
+                              return InkWell(
+                                onTap: () {
+                                  if (!allowed) {
+                                    _showAccessDeniedDialog('Bkash Customer');
+                                    return;
+                                  }
+                                  Navigator.push(context, MaterialPageRoute(builder: (_) => const BkashCustomerListPage()));
+                                },
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    const MenuCard(Icons.account_balance, "Bkash Customer"),
+                                    if (!allowed)
+                                      Container(
+                                        color: Colors.black.withValues(alpha: 0.45),
+                                      ),
+                                    if (!allowed)
+                                      const Center(child: Icon(Icons.lock, color: Colors.white70, size: 28)),
+                                  ],
+                                ),
+                              );
+                            }),
+
+                            // Personal (RESTRICTED)
+                            Builder(builder: (ctx) {
+                              final allowed = localCanAccess('personal');
+                              return InkWell(
+                                onTap: () {
+                                  if (!allowed) {
+                                    _showAccessDeniedDialog('Personal');
+                                    return;
+                                  }
+                                  Navigator.push(context, MaterialPageRoute(builder: (_) => const PersonalPage()));
+                                },
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    const MenuCard(Icons.personal_injury, "Personal"),
+                                    if (!allowed)
+                                      Container(
+                                        color: Colors.black.withValues(alpha: 0.45),
+                                      ),
+                                    if (!allowed)
+                                      const Center(child: Icon(Icons.lock, color: Colors.white70, size: 28)),
+                                  ],
+                                ),
+                              );
+                            }),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 6,
+                child: SafeArea(
+                  top: false,
+                  child: Center(
+                    child: Text(
+                      "© Jononi Pharmacy",
+                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Robust search implementation:
+  /// - Run two queries in parallel:
+  ///   1) prefix query on `medicineNameLower` (fast and precise)
+  ///   2) recent documents ordered by `updatedAt` (to find docs that might be missing normalized fields)
+  /// - Merge results, dedupe, then apply the same "best per name" selection as before.
+  Widget _buildMedicineSearchResults(String query) {
+    final q = query.toLowerCase();
+    final col = FirebaseFirestore.instance.collection('medicines');
+
+    // Query A: prefix query using normalized field (this will find docs that have medicineNameLower)
+    final Query prefixQuery = col.orderBy('medicineNameLower').startAt([q]).endAt([q + '\uf8ff']).limit(500);
+
+    // Query B: recent docs ordered by updatedAt to catch docs lacking normalized fields
+    final Query recentQuery = col.orderBy('updatedAt', descending: true).limit(1000);
+
+    return FutureBuilder<List<QuerySnapshot>>(
+      future: Future.wait([prefixQuery.get(), recentQuery.get()]),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+        if (snap.hasError) {
+          debugPrint('search future error: ${snap.error}');
+          return const Center(child: Text('Search error', style: TextStyle(color: Colors.white70)));
+        }
+        final List<QuerySnapshot>? results = snap.data;
+        if (results == null || results.length < 2) {
+          return const Center(child: Text('No medicines found', style: TextStyle(color: Colors.white70)));
+        }
+
+        final QuerySnapshot prefixSnap = results[0];
+        final QuerySnapshot recentSnap = results[1];
+
+        // Use a map to dedupe by document id
+        final Map<String, QueryDocumentSnapshot> byId = {};
+
+        // Add all prefix results first (these are exact server-side matches)
+        for (final d in prefixSnap.docs) {
+          byId[d.id] = d;
+        }
+
+        // For recent docs, include those that match the query by checking available name fields.
+        for (final d in recentSnap.docs) {
+          if (byId.containsKey(d.id)) continue; // already included
+          final data = d.data() as Map<String, dynamic>;
+          final nameLower = (data['medicineNameLower'] ?? data['medicineName'] ?? data['name'] ?? '').toString().toLowerCase();
+          if (nameLower.startsWith(q)) {
+            byId[d.id] = d;
+          }
+        }
+
+        if (byId.isEmpty) {
+          return const Center(child: Text('No medicines found', style: TextStyle(color: Colors.white70)));
+        }
+
+        // Now apply the same "best per normalized name" grouping logic as before.
+        final List<QueryDocumentSnapshot> allCandidates = byId.values.toList();
+
+        final Map<String, QueryDocumentSnapshot> bestByName = {};
+        for (final d in allCandidates) {
+          final data = d.data() as Map<String, dynamic>;
+          final nameLower = (data['medicineNameLower'] ?? data['medicineName'] ?? data['name'] ?? '').toString().toLowerCase();
+
+          Timestamp? updated = (data['updatedAt'] as Timestamp?) ?? (data['createdAt'] as Timestamp?);
+          final int ts = (updated?.millisecondsSinceEpoch ?? 0);
+
+          if (!bestByName.containsKey(nameLower)) {
+            bestByName[nameLower] = d;
+          } else {
+            final existing = bestByName[nameLower]!;
+            final existingData = existing.data() as Map<String, dynamic>;
+            Timestamp? exUpdated = (existingData['updatedAt'] as Timestamp?) ?? (existingData['createdAt'] as Timestamp?);
+            final int exTs = (exUpdated?.millisecondsSinceEpoch ?? 0);
+
+            if (ts > exTs) {
+              bestByName[nameLower] = d;
+            } else if (ts == exTs) {
+              final currQtyRaw = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
+              final existQtyRaw = existingData['quantity'] ?? existingData['stock'] ?? existingData['qty'] ?? 0;
+              final int currQty = (currQtyRaw is num) ? currQtyRaw.toInt() : int.tryParse(currQtyRaw.toString()) ?? 0;
+              final int existQty = (existQtyRaw is num) ? existQtyRaw.toInt() : int.tryParse(existQtyRaw.toString()) ?? 0;
+              if (currQty >= existQty) {
+                bestByName[nameLower] = d;
+              }
+            }
+          }
+        }
+
+        final resultsList = bestByName.values.toList()
+          ..sort((a, b) {
+            final an = (a.data() as Map<String, dynamic>)['medicineName'] ?? '';
+            final bn = (b.data() as Map<String, dynamic>)['medicineName'] ?? '';
+            return an.toString().toLowerCase().compareTo(bn.toString().toLowerCase());
+          });
+
+        return ListView.separated(
+          padding: const EdgeInsets.only(bottom: 120),
+          itemCount: resultsList.length,
+          separatorBuilder: (_, __) => const Divider(color: Colors.white24),
+          itemBuilder: (_, i) {
+            final d = resultsList[i];
+            final data = d.data() as Map<String, dynamic>;
+            final name = (data['medicineName'] ?? data['medicineNameLower'] ?? data['name'] ?? '').toString();
+            final priceRaw = data['price'] ?? 0;
+            final String priceText = (priceRaw is num) ? priceRaw.toString() : priceRaw.toString();
+            final stockVal = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
+            final int stockInt = (stockVal is num) ? stockVal.toInt() : int.tryParse(stockVal.toString()) ?? 0;
+            final String stockText = stockInt.toString();
+            final Color stockColor = stockInt <= 0 ? const Color(0xFFFF6B6B) : const Color(0xFF7AE582);
+            const String taka = '\u09F3';
+            Widget infoChip(String label, String value, Color color) {
+              return Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.14),
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: color.withValues(alpha: 0.65)),
+                ),
+                child: Text(
+                  '$label: $value',
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              );
+            }
+
+            return Container(
+              margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.25),
+                    blurRadius: 16,
+                    offset: const Offset(0, 8),
+                  ),
+                ],
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () {
+                    showDialog(
+                      context: context,
+                      builder: (_) => Theme(
+                        data: _dialogTheme(context),
+                        child: AlertDialog(
+                          backgroundColor: _bgEnd,
+                          surfaceTintColor: Colors.transparent,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18),
+                            side: BorderSide(color: Colors.white.withOpacity(0.12)),
+                          ),
+                          title: Text(name),
+                          content: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Medicine details',
+                                style: TextStyle(color: Colors.white70, fontSize: 12),
+                              ),
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 6,
+                                children: [
+                                  infoChip('Price', '$taka $priceText', _accent),
+                                  infoChip('Stock', stockText, stockColor),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              const Divider(color: Colors.white24),
+                              const SizedBox(height: 6),
+                              Text(
+                                stockInt <= 0 ? 'Out of stock' : 'Available',
+                                style: TextStyle(
+                                  color: stockColor,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: _accent.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: _accent.withValues(alpha: 0.6)),
+                          ),
+                          child: const Icon(Icons.medication, color: _accent, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                name,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 6,
+                                children: [
+                                  infoChip('Price', '$taka $priceText', _accent),
+                                  infoChip('Stock', stockText, stockColor),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.chevron_right, color: Colors.white38),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // Drawer item helper
+  static Widget drawerItem(IconData icon, String title, [VoidCallback? onTap]) {
+    return ListTile(
+      leading: Container(
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.08),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+        ),
+        child: Icon(icon, color: _accent, size: 18),
+      ),
+      title: Text(title, style: const TextStyle(color: Colors.white)),
+      trailing: const Icon(Icons.chevron_right, size: 18, color: Colors.white38),
+      onTap: onTap ?? () {},
+    );
+  }
+}
+
+/// Menu Card
+class MenuCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+
+  const MenuCard(this.icon, this.title, {super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.14)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: _accent.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+              border: Border.all(color: _accent.withValues(alpha: 0.6)),
+            ),
+            child: Icon(icon, size: 22, color: _accent),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+              fontSize: 12,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+const Color _bgStart = Color(0xFF041A14);
+const Color _bgEnd = Color(0xFF0E5A42);
+const Color _accent = Color(0xFFFFD166);
+
+Widget _buildBackdrop() {
+  return Stack(
+    children: [
+      Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [_bgStart, _bgEnd],
+          ),
+        ),
+      ),
+      Positioned(
+        top: -120,
+        right: -80,
+        child: Container(
+          width: 240,
+          height: 240,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [_accent.withValues(alpha: 0.35), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        bottom: -140,
+        left: -90,
+        child: Container(
+          width: 260,
+          height: 260,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [Colors.white.withValues(alpha: 0.18), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+class DeveloperDetailsPage extends StatelessWidget {
+  const DeveloperDetailsPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        title: const Text(
+          "Developer Details",
+          style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+        ),
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+                        ),
+                        child: const Text(
+                          "This app developed by RoyGroup",
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                          ),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  developerCard("Kamonasish Roy", "+8801795985912"),
+                  const SizedBox(height: 12),
+                  developerCard("Shuvasish Roy", "+8801771815801"),
+                  const Spacer(),
+                  const Text(
+                    "© All copyright reserved Jononi Pharmacy",
+                    style: TextStyle(fontSize: 12, color: Colors.white70),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget developerCard(String name, String phone) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.person, color: _accent, size: 36),
+              const SizedBox(width: 12),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    phone,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+
+
+
+
+
+
+

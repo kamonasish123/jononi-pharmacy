@@ -1,7 +1,56 @@
-// ExchangeDetailPage.dart
+﻿// ExchangeDetailPage.dart
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+
+const Color _bgStart = Color(0xFF041A14);
+const Color _bgEnd = Color(0xFF0E5A42);
+const Color _accent = Color(0xFFFFD166);
+
+Widget _buildBackdrop() {
+  return Stack(
+    children: [
+      Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [_bgStart, _bgEnd],
+          ),
+        ),
+      ),
+      Positioned(
+        top: -120,
+        right: -80,
+        child: Container(
+          width: 240,
+          height: 240,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [_accent.withOpacity(0.35), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        bottom: -140,
+        left: -90,
+        child: Container(
+          width: 260,
+          height: 260,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [Colors.white.withOpacity(0.18), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
 
 class ExchangeDetailPage extends StatefulWidget {
   final String pharmacyId;
@@ -43,6 +92,32 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
         .where('createdAt', isLessThan: Timestamp.fromDate(end))
         .orderBy('createdAt', descending: true)
         .snapshots();
+  }
+
+  ThemeData _dialogTheme(BuildContext context) {
+    final base = Theme.of(context);
+    return base.copyWith(
+      dialogBackgroundColor: _bgEnd,
+      colorScheme: base.colorScheme.copyWith(
+        surface: _bgEnd,
+        onSurface: Colors.white,
+        primary: _accent,
+      ),
+      textTheme: base.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white),
+      listTileTheme: const ListTileThemeData(
+        textColor: Colors.white,
+        iconColor: Colors.white70,
+      ),
+      radioTheme: RadioThemeData(
+        fillColor: MaterialStateProperty.all(_accent),
+      ),
+      inputDecorationTheme: const InputDecorationTheme(
+        labelStyle: TextStyle(color: Colors.white70),
+        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white30)),
+        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
+      ),
+      dividerColor: Colors.white24,
+    );
   }
 
   // ----------------- Create a borrow/lend transaction (multiple items) -----------------
@@ -92,12 +167,21 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
             if (!isReceive && qty > available) {
               showDialog(
                 context: context,
-                builder: (_) => AlertDialog(
-                  title: const Text('Insufficient stock'),
-                  content: Text('Cannot give $qty items. Available stock: $available.'),
-                  actions: [
-                    TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
-                  ],
+                builder: (_) => Theme(
+                  data: _dialogTheme(context),
+                  child: AlertDialog(
+                    backgroundColor: _bgEnd,
+                    surfaceTintColor: Colors.transparent,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20),
+                      side: BorderSide(color: Colors.white24),
+                    ),
+                    title: const Text('Insufficient stock'),
+                    content: Text('Cannot give $qty items. Available stock: $available.'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+                    ],
+                  ),
                 ),
               );
               return;
@@ -120,8 +204,16 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
             setState(() {});
           }
 
-          return AlertDialog(
-            title: Text('${isReceive ? "Receive from" : "Give to"} — ${widget.pharmacyName}'),
+          return Theme(
+            data: _dialogTheme(context),
+            child: AlertDialog(
+              backgroundColor: _bgEnd,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: Colors.white24),
+              ),
+            title: Text('${isReceive ? "Receive from" : "Give to"} - ${widget.pharmacyName}'),
             content: SizedBox(
               width: 360, // constrain width to avoid layout/hitTest issues
               child: SingleChildScrollView(
@@ -134,16 +226,16 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                         Expanded(
                           child: RadioListTile<bool>(
                             value: true,
-                            groupValue: isReceive,
-                            title: const Text('Receive'),
+                            groupValue: isReceive, dense: true, visualDensity: VisualDensity.compact, contentPadding: EdgeInsets.zero,
+                            title: const Text('Receive', maxLines: 1, overflow: TextOverflow.ellipsis),
                             onChanged: (v) => setState(() => isReceive = v ?? true),
                           ),
                         ),
                         Expanded(
                           child: RadioListTile<bool>(
                             value: false,
-                            groupValue: isReceive,
-                            title: const Text('Give'),
+                            groupValue: isReceive, dense: true, visualDensity: VisualDensity.compact, contentPadding: EdgeInsets.zero,
+                            title: const Text('Give', maxLines: 1, overflow: TextOverflow.ellipsis),
                             onChanged: (v) => setState(() => isReceive = v ?? true),
                           ),
                         ),
@@ -224,8 +316,8 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                               final medName = (data['medicineName'] ?? data['medicineNameLower'] ?? '').toString();
                               final price = ((data['price'] ?? 0) as num).toDouble();
                               return ListTile(
-                                title: Text(medName),
-                                subtitle: Text('Price: ৳$price • Stock: $stock'),
+                                title: Text(medName, style: const TextStyle(color: Colors.white)),
+                                subtitle: Text('Price: ৳$price | Stock: $stock', style: const TextStyle(color: Colors.white70)),
                                 onTap: () async {
                                   // Fetch the latest snapshot for this medicine to ensure we have current stock
                                   await _fetchLatestMed(d.id);
@@ -265,12 +357,21 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                               if (!isReceive && qty > latestAvailable) {
                                 showDialog(
                                   context: context,
-                                  builder: (_) => AlertDialog(
-                                    title: const Text('Insufficient stock'),
-                                    content: Text('Cannot give $qty items. Available stock: $latestAvailable.'),
-                                    actions: [
-                                      TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
-                                    ],
+                                  builder: (_) => Theme(
+                                    data: _dialogTheme(context),
+                                    child: AlertDialog(
+                                      backgroundColor: _bgEnd,
+                                      surfaceTintColor: Colors.transparent,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(20),
+                                        side: BorderSide(color: Colors.white24),
+                                      ),
+                                      title: const Text('Insufficient stock'),
+                                      content: Text('Cannot give $qty items. Available stock: $latestAvailable.'),
+                                      actions: [
+                                        TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+                                      ],
+                                    ),
                                   ),
                                 );
                                 return;
@@ -282,7 +383,7 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                         ],
                       ),
                     const SizedBox(height: 12),
-                    const Divider(),
+                    const Divider(color: Colors.white24),
                     const SizedBox(height: 8),
                     const Text('Picked items:', style: TextStyle(fontWeight: FontWeight.bold)),
                     const SizedBox(height: 6),
@@ -293,8 +394,8 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                         itemBuilder: (context, i) {
                           final it = pickedItems[i];
                           return ListTile(
-                            title: Text('${it['medicineName']}'),
-                            subtitle: Text('${it['qty']} × ৳${it['price']} = ৳${it['total']}'),
+                            title: Text('${it['medicineName']}', style: const TextStyle(color: Colors.white)),
+                            subtitle: Text('${it['qty']} x ৳${it['price']} = ৳${it['total']}', style: const TextStyle(color: Colors.white70)),
                             trailing: IconButton(
                               icon: const Icon(Icons.delete, color: Colors.red),
                               onPressed: () {
@@ -387,19 +488,28 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
 
                     Navigator.pop(context);
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('${isReceive ? "Received" : "Given"} saved — subtotal ৳${subTotal.toStringAsFixed(2)}')),
+                      SnackBar(content: Text('${isReceive ? "Received" : "Given"} saved - subtotal ৳${subTotal.toStringAsFixed(2)}')),
                     );
                   } catch (e) {
                     // If transaction throws due to insufficient stock or other error, show friendly message.
                     final msg = e.toString();
                     await showDialog(
                       context: context,
-                      builder: (_) => AlertDialog(
-                        title: const Text('Operation failed'),
-                        content: Text(msg),
-                        actions: [
-                          TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
-                        ],
+                      builder: (_) => Theme(
+                        data: _dialogTheme(context),
+                        child: AlertDialog(
+                          backgroundColor: _bgEnd,
+                          surfaceTintColor: Colors.transparent,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            side: BorderSide(color: Colors.white24),
+                          ),
+                          title: const Text('Operation failed'),
+                          content: Text(msg),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+                          ],
+                        ),
                       ),
                     );
                   }
@@ -407,7 +517,8 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                 child: const Text('Save'),
               )
             ],
-          );
+          ),
+        );
         });
       },
     );
@@ -424,8 +535,16 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
       context: context,
       builder: (_) {
         return StatefulBuilder(builder: (context, setState) {
-          return AlertDialog(
-            title: Text('Record Payment — ${widget.pharmacyName}'),
+          return Theme(
+            data: _dialogTheme(context),
+            child: AlertDialog(
+              backgroundColor: _bgEnd,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: BorderSide(color: Colors.white24),
+              ),
+            title: Text('Record Payment - ${widget.pharmacyName}'),
             content: SizedBox(
               width: 360,
               child: Column(
@@ -434,7 +553,7 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                   TextField(
                     controller: amountController,
                     keyboardType: TextInputType.number,
-                    decoration: const InputDecoration(labelText: 'Amount'),
+                    decoration: const InputDecoration(labelText: 'Amount (৳)'),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -499,7 +618,8 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                 child: const Text('Submit'),
               ),
             ],
-          );
+          ),
+        );
         });
       },
     );
@@ -547,51 +667,64 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
     // Show dialog with totals
     await showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text('Totals — ${widget.pharmacyName}'),
+      builder: (_) => Theme(
+        data: _dialogTheme(context),
+        child: AlertDialog(
+          backgroundColor: _bgEnd,
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: Colors.white24),
+          ),
+        title: Text('Totals - ${widget.pharmacyName}'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
-                const Expanded(child: Text('Total received (today):', style: TextStyle(fontWeight: FontWeight.w600))),
-                Text('৳${totalReceive.toStringAsFixed(2)}'),
+                const Expanded(child: Text('Total received (today):', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white))),
+                Text('৳${totalReceive.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white)),
               ],
             ),
             const SizedBox(height: 8),
             Row(
               children: [
-                const Expanded(child: Text('Total given (today):', style: TextStyle(fontWeight: FontWeight.w600))),
-                Text('৳${totalGive.toStringAsFixed(2)}'),
+                const Expanded(child: Text('Total given (today):', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white))),
+                Text('৳${totalGive.toStringAsFixed(2)}', style: const TextStyle(color: Colors.white)),
               ],
             ),
             const SizedBox(height: 12),
-            Text('Date: $dateString', style: const TextStyle(color: Colors.black54)),
+            Text('Date: $dateString', style: const TextStyle(color: Colors.white70)),
           ],
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
         ],
       ),
+    ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF01684D),
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         centerTitle: true,
-        backgroundColor: const Color(0xFF01684D),
-        title: Text('${widget.pharmacyName} — $dateString'),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: Text(
+          '${widget.pharmacyName} - $dateString',
+          style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+        ),
         actions: [
-          // totals button (top-right) — shows total receive and total give for the selected date
           IconButton(
-            icon: const Icon(Icons.bar_chart),
+            icon: const Icon(Icons.bar_chart, color: Colors.white),
             tooltip: 'Show totals (give / receive) for this date',
             onPressed: _showTotalsDialog,
           ),
-          IconButton(icon: const Icon(Icons.calendar_today), onPressed: pickDate),
+          IconButton(icon: const Icon(Icons.calendar_today, color: Colors.white), onPressed: pickDate),
         ],
       ),
       floatingActionButton: Column(
@@ -607,75 +740,133 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
           const SizedBox(height: 10),
           FloatingActionButton(
             heroTag: 'pay',
-            backgroundColor: Colors.yellow[700],
+            backgroundColor: _accent,
             child: const Icon(Icons.payment, color: Colors.black),
             onPressed: recordPayment,
             tooltip: 'Record payment (cash -> sales + reduce due; non-cash -> reduce due only)',
           ),
         ],
       ),
-      body: SafeArea(
-        child: StreamBuilder<QuerySnapshot>(
-          stream: recordsForDay(),
-          builder: (context, snap) {
-            if (snap.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
-            final docs = snap.data?.docs ?? [];
-            if (docs.isEmpty) return Center(child: Text('No exchange records for this day', style: TextStyle(color: Colors.white70)));
-            return ListView.builder(
-              itemCount: docs.length,
-              itemBuilder: (context, i) {
-                final d = docs[i];
-                final data = d.data() as Map<String, dynamic>;
-                final type = (data['type'] ?? 'borrow').toString();
-                final direction = (data['direction'] ?? 'receive').toString();
-                final time = data['createdAt'] != null ? DateFormat('hh:mm a').format((data['createdAt'] as Timestamp).toDate()) : '';
-                if (type == 'borrow') {
-                  final items = (data['items'] as List<dynamic>? ?? []);
-                  final subTotal = ((data['subTotal'] ?? 0) as num).toDouble();
-                  final dirLabel = direction == 'receive' ? 'Received' : 'Given';
-                  return Card(
-                    color: Colors.white.withOpacity(0.12),
-                    margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    child: ListTile(
-                      title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('$dirLabel — ${widget.pharmacyName}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 6),
-                        ...items.map((it) {
-                          final mName = (it['medicineName'] ?? '').toString();
-                          final qty = (it['qty'] is num) ? (it['qty'] as num).toInt() : int.tryParse(it['qty'].toString()) ?? 0;
-                          final price = ((it['price'] ?? 0) as num).toDouble();
-                          final total = ((it['total'] ?? (qty * price)) as num).toDouble();
-                          return Text("$mName $qty × ৳$price = ৳$total", style: const TextStyle(color: Colors.white));
-                        }).toList(),
-                        const Divider(color: Colors.white),
-                        Text('Total = ৳$subTotal', style: const TextStyle(color: Colors.yellowAccent, fontWeight: FontWeight.bold)),
-                        Text('Time: $time', style: const TextStyle(color: Colors.white70, fontSize: 12)),
-                      ]),
-                      trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.redAccent), onPressed: () => _deleteRecord(d.reference)),
-                    ),
-                  );
-                } else {
-                  final amount = ((data['amount'] ?? 0) as num).toDouble();
-                  final isCash = (data['isCash'] ?? true) as bool;
-                  return Card(
-                    color: Colors.white.withOpacity(0.12),
-                    margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    child: ListTile(
-                      title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(isCash ? 'Payment (cash) — ${widget.pharmacyName}' : 'Payment (non-cash) — ${widget.pharmacyName}',
-                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                        Text('Amount: ৳$amount', style: const TextStyle(color: Colors.white70)),
-                        Text('Time: $time', style: const TextStyle(fontSize: 12)),
-                      ]),
-                      trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.redAccent), onPressed: () => _deleteRecord(d.reference)),
-                    ),
-                  );
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: StreamBuilder<QuerySnapshot>(
+              stream: recordsForDay(),
+              builder: (context, snap) {
+                if (snap.connectionState == ConnectionState.waiting) {
+                  return const Center(child: CircularProgressIndicator(color: Colors.white));
                 }
+                final docs = snap.data?.docs ?? [];
+                if (docs.isEmpty) {
+                  return const Center(child: Text('No exchange records for this day', style: TextStyle(color: Colors.white70)));
+                }
+                return ListView.builder(
+                  padding: const EdgeInsets.only(bottom: 120, top: 8),
+                  itemCount: docs.length,
+                  itemBuilder: (context, i) {
+                    final d = docs[i];
+                    final data = d.data() as Map<String, dynamic>;
+                    final type = (data['type'] ?? 'borrow').toString();
+                    final direction = (data['direction'] ?? 'receive').toString();
+                    final time = data['createdAt'] != null
+                        ? DateFormat('hh:mm a').format((data['createdAt'] as Timestamp).toDate())
+                        : '';
+                    if (type == 'borrow') {
+                      final items = (data['items'] as List<dynamic>? ?? []);
+                      final subTotal = ((data['subTotal'] ?? 0) as num).toDouble();
+                      final dirLabel = direction == 'receive' ? 'Received' : 'Given';
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.white.withOpacity(0.18)),
+                              ),
+                              child: ListTile(
+                                title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Text(
+                                    '$dirLabel - ${widget.pharmacyName}',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  ...items.map((it) {
+                                    final mName = (it['medicineName'] ?? '').toString();
+                                    final qty = (it['qty'] is num) ? (it['qty'] as num).toInt() : int.tryParse(it['qty'].toString()) ?? 0;
+                                    final price = ((it['price'] ?? 0) as num).toDouble();
+                                    final total = ((it['total'] ?? (qty * price)) as num).toDouble();
+                                    return Text(
+                                      "$mName $qty x ৳$price = ৳$total",
+                                      style: const TextStyle(color: Colors.white70),
+                                    );
+                                  }).toList(),
+                                  const SizedBox(height: 8),
+                                  Container(height: 1, color: Colors.white12),
+                                  const SizedBox(height: 8),
+                                  Text('Total = ৳$subTotal', style: const TextStyle(color: Colors.yellowAccent, fontWeight: FontWeight.bold)),
+                                  Text('Time: $time', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                ]),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.redAccent),
+                                  onPressed: () => _deleteRecord(d.reference),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    } else {
+                      final amount = ((data['amount'] ?? 0) as num).toDouble();
+                      final isCash = (data['isCash'] ?? true) as bool;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: BackdropFilter(
+                            filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.08),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: Colors.white.withOpacity(0.18)),
+                              ),
+                              child: ListTile(
+                                title: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                  Text(
+                                    isCash
+                                        ? 'Payment (cash) - ${widget.pharmacyName}'
+                                        : 'Payment (non-cash) - ${widget.pharmacyName}',
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                                  ),
+                                  Text('Amount: ৳$amount', style: const TextStyle(color: Colors.white70)),
+                                  Text('Time: $time', style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                ]),
+                                trailing: IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.redAccent),
+                                  onPressed: () => _deleteRecord(d.reference),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                  },
+                );
               },
-            );
-          },
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
+
+
+
+

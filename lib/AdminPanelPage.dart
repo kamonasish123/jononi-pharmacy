@@ -1,9 +1,57 @@
-// AdminPanelPage.dart
+﻿// AdminPanelPage.dart
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+const Color _bgStart = Color(0xFF041A14);
+const Color _bgEnd = Color(0xFF0E5A42);
+const Color _accent = Color(0xFFFFD166);
+
+Widget _buildBackdrop() {
+  return Stack(
+    children: [
+      Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [_bgStart, _bgEnd],
+          ),
+        ),
+      ),
+      Positioned(
+        top: -120,
+        right: -80,
+        child: Container(
+          width: 240,
+          height: 240,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [_accent.withOpacity(0.35), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+      Positioned(
+        bottom: -140,
+        left: -90,
+        child: Container(
+          width: 260,
+          height: 260,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [Colors.white.withOpacity(0.18), Colors.transparent],
+            ),
+          ),
+        ),
+      ),
+    ],
+  );
+}
 class AdminPanelPage extends StatefulWidget {
   const AdminPanelPage({super.key});
 
@@ -68,6 +116,32 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
     return lr == 'admin' || lr == 'manager';
   }
 
+  Widget _metaPill(String text, {IconData? icon, Color? color}) {
+    final c = color ?? Colors.white70;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withOpacity(0.16)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (icon != null) ...[
+            Icon(icon, size: 12, color: c),
+            const SizedBox(width: 4),
+          ],
+          Text(
+            text,
+            style: TextStyle(color: c, fontSize: 11, fontWeight: FontWeight.w600),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ],
+      ),
+    );
+  }
+
   /// Helper to check whether the current user (editor) may change target user's role to `newRole`,
   /// and whether editor may change target user's current role at all.
   /// Returns null when allowed, otherwise an error message.
@@ -79,7 +153,7 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
       if (meDoc.exists) {
         final meRole = (meDoc.data() as Map<String, dynamic>)['role'] ?? editorRole;
         // use updated
-        // (we won't force setState here — we'll still use _myRole for UI)
+        // (we won't force setState here â€” we'll still use _myRole for UI)
       }
     } catch (_) {}
 
@@ -391,35 +465,94 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
 
   @override
   Widget build(BuildContext context) {
-    // Use a TabController so admin can switch between Pending and All Users
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Admin Panel — Users'),
-          centerTitle: true,
-          backgroundColor: const Color(0xFF01684D),
-          actions: [
-            if (_loadingRole)
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 12),
-                child: Center(child: CircularProgressIndicator()),
-              ),
-            if (!_loadingRole)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Center(child: Text('You: ${_myRole.toUpperCase()}', style: const TextStyle(fontSize: 14))),
-              ),
-          ],
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Pending'),
-              Tab(text: 'All Users'),
-            ],
+    final theme = Theme.of(context).copyWith(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: Colors.transparent,
+      colorScheme: Theme.of(context).colorScheme.copyWith(
+            brightness: Brightness.dark,
+            primary: _accent,
+            secondary: _accent,
           ),
+      dividerColor: Colors.white12,
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: Colors.white.withOpacity(0.12),
+        labelStyle: const TextStyle(color: Colors.white70),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: Colors.white.withOpacity(0.28)),
         ),
-        body: TabBarView(
-          children: [
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide(color: _accent.withOpacity(0.7)),
+        ),
+      ),
+    );
+
+    return Theme(
+      data: theme,
+      child: DefaultTabController(
+        length: 2,
+        child: Scaffold(
+          backgroundColor: Colors.transparent,
+          extendBodyBehindAppBar: true,
+          appBar: AppBar(
+            title: const Text(
+              'Admin Panel - Users',
+              style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+            ),
+            centerTitle: true,
+            backgroundColor: Colors.transparent,
+            elevation: 0,
+            actions: [
+              if (_loadingRole)
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 12),
+                  child: Center(child: CircularProgressIndicator(color: Colors.white)),
+                ),
+              if (!_loadingRole)
+                Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.white.withOpacity(0.2)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.verified_user, size: 14, color: _accent),
+                        const SizedBox(width: 6),
+                        Text(
+                          _myRole.toUpperCase(),
+                          style: const TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+            bottom: const TabBar(
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white70,
+              indicatorColor: _accent,
+              tabs: [
+                Tab(text: 'Pending'),
+                Tab(text: 'All Users'),
+              ],
+            ),
+          ),
+          body: Stack(
+            children: [
+              _buildBackdrop(),
+              SafeArea(
+                top: false,
+                child: Padding(
+              padding: const EdgeInsets.only(top: kToolbarHeight + kTextTabBarHeight + 16),
+              child: TabBarView(
+                    children: [
             // ---------------------------
             // Pending tab
             // ---------------------------
@@ -428,85 +561,117 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
                 // Keep your quick promote UI consistent (as above). It remains visible here.
                 Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _promoteEmailController,
-                              decoration: const InputDecoration(
-                                labelText: 'Email to change role (e.g. rkamonasish@gmail.com)',
-                                border: OutlineInputBorder(),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white.withOpacity(0.18)),
+                        ),
+                        child: Column(
+                          children: [
+                            LayoutBuilder(
+                              builder: (ctx, constraints) {
+                                final field = TextField(
+                                  controller: _promoteEmailController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Email to change role (e.g. rkamonasish@gmail.com)',
+                                  ),
+                                );
+                                final button = ElevatedButton(
+                                  onPressed: _canEditRoles
+                                      ? () async {
+                                          final email = _promoteEmailController.text.trim();
+                                          if (email.isEmpty) {
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Type an email first')));
+                                            return;
+                                          }
+                                          final chosen = await showDialog<String?>(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              title: const Text('Choose role'),
+                                              content: Column(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: roles.map((r) {
+                                                  return ListTile(
+                                                    title: Text(r),
+                                                    onTap: () => Navigator.pop(ctx, r),
+                                                  );
+                                                }).toList(),
+                                              ),
+                                            ),
+                                          );
+                                          if (chosen == null) return;
+                                          await _setRoleByEmail(email, chosen);
+                                        }
+                                      : null,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _accent,
+                                    foregroundColor: Colors.black,
+                                  ),
+                                  child: const Text('Set Role'),
+                                );
+
+                                final isNarrow = constraints.maxWidth < 420;
+                                if (isNarrow) {
+                                  return Column(
+                                    children: [
+                                      field,
+                                      const SizedBox(height: 8),
+                                      SizedBox(width: double.infinity, child: button),
+                                    ],
+                                  );
+                                }
+                                return Row(
+                                  children: [
+                                    Expanded(child: field),
+                                    const SizedBox(width: 8),
+                                    button,
+                                  ],
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                icon: const Icon(Icons.star, size: 18, color: _accent),
+                                label: const Text('Set rkamonasish@gmail.com as admin'),
+                                onPressed: _canEditRoles
+                                    ? () async {
+                                        final ok = await showDialog<bool>(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            title: const Text('Confirm'),
+                                            content: const Text('Set rkamonasish@gmail.com as admin?'),
+                                            actions: [
+                                              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes')),
+                                            ],
+                                          ),
+                                        );
+                                        if (ok == true) {
+                                          await _setRoleByEmail('rkamonasish@gmail.com', 'admin');
+                                        }
+                                      }
+                                    : null,
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          ElevatedButton(
-                            onPressed: _canEditRoles
-                                ? () async {
-                              final email = _promoteEmailController.text.trim();
-                              if (email.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Type an email first')));
-                                return;
-                              }
-                              final chosen = await showDialog<String?>(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: const Text('Choose role'),
-                                  content: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: roles.map((r) {
-                                      return ListTile(
-                                        title: Text(r),
-                                        onTap: () => Navigator.pop(ctx, r),
-                                      );
-                                    }).toList(),
-                                  ),
-                                ),
-                              );
-                              if (chosen == null) return;
-                              await _setRoleByEmail(email, chosen);
-                            }
-                                : null,
-                            child: const Text('Set Role'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          icon: const Icon(Icons.star, size: 18),
-                          label: const Text('Set rkamonasish@gmail.com → admin'),
-                          onPressed: _canEditRoles
-                              ? () async {
-                            final ok = await showDialog<bool>(
-                              context: context,
-                              builder: (ctx) => AlertDialog(
-                                title: const Text('Confirm'),
-                                content: const Text('Set rkamonasish@gmail.com as admin?'),
-                                actions: [
-                                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                                  ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes')),
-                                ],
-                              ),
-                            );
-                            if (ok == true) {
-                              await _setRoleByEmail('rkamonasish@gmail.com', 'admin');
-                            }
-                          }
-                              : null,
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text('Only Admin / Manager can change roles.', style: TextStyle(color: Colors.grey.shade300)),
+                            ),
+                          ],
                         ),
                       ),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text('Only Admin / Manager can change roles.', style: TextStyle(color: Colors.grey.shade300)),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-                const Divider(height: 1),
+                const SizedBox(height: 8),
 
                 // Pending approvals list (query users where approved == false)
                 Expanded(
@@ -542,8 +707,9 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
                       }
 
                       return ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 120),
                         itemCount: pendingDocs.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (context, i) {
                           final doc = pendingDocs[i];
                           final data = doc.data() as Map<String, dynamic>;
@@ -553,61 +719,81 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
                           final role = (data['role'] ?? 'seller').toString();
                           final ts = data['approvalRequestedAt'] as Timestamp?;
                           final requestedAt = ts != null ? ts.toDate() : null;
+                          final requestedAtStr = requestedAt != null
+                              ? '${requestedAt.year}-${requestedAt.month.toString().padLeft(2, '0')}-${requestedAt.day.toString().padLeft(2, '0')} ${requestedAt.hour.toString().padLeft(2, '0')}:${requestedAt.minute.toString().padLeft(2, '0')}'
+                              : null;
 
-                          return ListTile(
-                            leading: CircleAvatar(child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?')),
-                            title: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  name.isNotEmpty ? name : email,
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                if (name.isNotEmpty)
-                                  Text(
-                                    email,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 13),
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.08),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: Colors.white.withOpacity(0.18)),
                                   ),
-                              ],
-                            ),
-                            subtitle: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Text('Role: $role'),
-                                    const SizedBox(width: 12),
-                                    if (requestedAt != null) ...[
-                                      const Icon(Icons.access_time, size: 14, color: Colors.black45),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        '${requestedAt.year}-${requestedAt.month.toString().padLeft(2, '0')}-${requestedAt.day.toString().padLeft(2, '0')} ${requestedAt.hour.toString().padLeft(2, '0')}:${requestedAt.minute.toString().padLeft(2, '0')}',
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                    ],
-                                  ],
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        CircleAvatar(
+                                          child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?'),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                name.isNotEmpty ? name : email,
+                                                style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                              if (name.isNotEmpty)
+                                                Text(
+                                                  email,
+                                                  maxLines: 1,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: const TextStyle(fontSize: 13, color: Colors.white70),
+                                                ),
+                                              const SizedBox(height: 6),
+                                              Wrap(
+                                                spacing: 8,
+                                                runSpacing: 6,
+                                                children: [
+                                                  _metaPill('Role: $role'),
+                                                  if (requestedAtStr != null) _metaPill(requestedAtStr, icon: Icons.access_time),
+                                                ],
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Column(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              tooltip: 'Approve',
+                                              icon: const Icon(Icons.check_circle, color: Colors.greenAccent),
+                                              onPressed: _canEditRoles ? () => _confirmApproveDialog(uid, email, role) : null,
+                                            ),
+                                            IconButton(
+                                              tooltip: 'Reject',
+                                              icon: const Icon(Icons.cancel, color: Colors.redAccent),
+                                              onPressed: _canEditRoles ? () => _confirmRejectDialog(uid, email) : null,
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
+                                  ),
                                 ),
-                              ],
-                            ),
-                            isThreeLine: true,
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                IconButton(
-                                  tooltip: 'Approve',
-                                  icon: const Icon(Icons.check_circle, color: Colors.green),
-                                  onPressed: _canEditRoles ? () => _confirmApproveDialog(uid, email, role) : null,
-                                ),
-                                IconButton(
-                                  tooltip: 'Reject',
-                                  icon: const Icon(Icons.cancel, color: Colors.red),
-                                  onPressed: _canEditRoles ? () => _confirmRejectDialog(uid, email) : null,
-                                ),
-                              ],
+                              ),
                             ),
                           );
                         },
@@ -626,85 +812,117 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
                 // Keep same quick promote UI here as well
                 Padding(
                   padding: const EdgeInsets.all(12),
-                  child: Column(
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: _promoteEmailController,
-                              decoration: const InputDecoration(
-                                labelText: 'Email to change role (e.g. rkamonasish@gmail.com)',
-                                border: OutlineInputBorder(),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: BackdropFilter(
+                      filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: Colors.white.withOpacity(0.18)),
+                        ),
+                        child: Column(
+                          children: [
+                            LayoutBuilder(
+                              builder: (ctx, constraints) {
+                                final field = TextField(
+                                  controller: _promoteEmailController,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Email to change role (e.g. rkamonasish@gmail.com)',
+                                  ),
+                                );
+                                final button = ElevatedButton(
+                                  onPressed: _canEditRoles
+                                      ? () async {
+                                          final email = _promoteEmailController.text.trim();
+                                          if (email.isEmpty) {
+                                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Type an email first')));
+                                            return;
+                                          }
+                                          final chosen = await showDialog<String?>(
+                                            context: context,
+                                            builder: (ctx) => AlertDialog(
+                                              title: const Text('Choose role'),
+                                              content: Column(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: roles.map((r) {
+                                                  return ListTile(
+                                                    title: Text(r),
+                                                    onTap: () => Navigator.pop(ctx, r),
+                                                  );
+                                                }).toList(),
+                                              ),
+                                            ),
+                                          );
+                                          if (chosen == null) return;
+                                          await _setRoleByEmail(email, chosen);
+                                        }
+                                      : null,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _accent,
+                                    foregroundColor: Colors.black,
+                                  ),
+                                  child: const Text('Set Role'),
+                                );
+
+                                final isNarrow = constraints.maxWidth < 420;
+                                if (isNarrow) {
+                                  return Column(
+                                    children: [
+                                      field,
+                                      const SizedBox(height: 8),
+                                      SizedBox(width: double.infinity, child: button),
+                                    ],
+                                  );
+                                }
+                                return Row(
+                                  children: [
+                                    Expanded(child: field),
+                                    const SizedBox(width: 8),
+                                    button,
+                                  ],
+                                );
+                              },
+                            ),
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                icon: const Icon(Icons.star, size: 18, color: _accent),
+                                label: const Text('Set rkamonasish@gmail.com as admin'),
+                                onPressed: _canEditRoles
+                                    ? () async {
+                                        final ok = await showDialog<bool>(
+                                          context: context,
+                                          builder: (ctx) => AlertDialog(
+                                            title: const Text('Confirm'),
+                                            content: const Text('Set rkamonasish@gmail.com as admin?'),
+                                            actions: [
+                                              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                              ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes')),
+                                            ],
+                                          ),
+                                        );
+                                        if (ok == true) {
+                                          await _setRoleByEmail('rkamonasish@gmail.com', 'admin');
+                                        }
+                                      }
+                                    : null,
                               ),
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          ElevatedButton(
-                            onPressed: _canEditRoles
-                                ? () async {
-                              final email = _promoteEmailController.text.trim();
-                              if (email.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Type an email first')));
-                                return;
-                              }
-                              final chosen = await showDialog<String?>(
-                                context: context,
-                                builder: (ctx) => AlertDialog(
-                                  title: const Text('Choose role'),
-                                  content: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: roles.map((r) {
-                                      return ListTile(
-                                        title: Text(r),
-                                        onTap: () => Navigator.pop(ctx, r),
-                                      );
-                                    }).toList(),
-                                  ),
-                                ),
-                              );
-                              if (chosen == null) return;
-                              await _setRoleByEmail(email, chosen);
-                            }
-                                : null,
-                            child: const Text('Set Role'),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          icon: const Icon(Icons.star, size: 18),
-                          label: const Text('Set rkamonasish@gmail.com → admin'),
-                          onPressed: _canEditRoles
-                              ? () async {
-                            final ok = await showDialog<bool>(
-                              context: context,
-                              builder: (ctx) => AlertDialog(
-                                title: const Text('Confirm'),
-                                content: const Text('Set rkamonasish@gmail.com as admin?'),
-                                actions: [
-                                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                                  ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Yes')),
-                                ],
-                              ),
-                            );
-                            if (ok == true) {
-                              await _setRoleByEmail('rkamonasish@gmail.com', 'admin');
-                            }
-                          }
-                              : null,
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text('Only Admin / Manager can change roles.', style: TextStyle(color: Colors.grey.shade300)),
+                            ),
+                          ],
                         ),
                       ),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text('Only Admin / Manager can change roles.', style: TextStyle(color: Colors.grey.shade300)),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-                const Divider(height: 1),
+                const SizedBox(height: 8),
 
                 // All users list (only approved users shown)
                 Expanded(
@@ -716,8 +934,9 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
                       if (docs.isEmpty) return const Center(child: Text('No user records', style: TextStyle(color: Colors.white70)));
 
                       return ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 120),
                         itemCount: docs.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        separatorBuilder: (_, __) => const SizedBox(height: 8),
                         itemBuilder: (context, i) {
                           final doc = docs[i];
                           final data = doc.data() as Map<String, dynamic>;
@@ -730,89 +949,127 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
                           String selectedRole = role;
                           final roleNorm = role.toLowerCase();
 
-                          return ListTile(
-                            leading: CircleAvatar(child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?')),
-                            title: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  name.isNotEmpty ? name : email,
-                                  style: const TextStyle(fontWeight: FontWeight.bold),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                if (name.isNotEmpty)
-                                  Text(
-                                    email,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 13),
+                          final tileColor = isMe ? Colors.white.withOpacity(0.12) : Colors.white.withOpacity(0.08);
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(16),
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: tileColor,
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: Colors.white.withOpacity(0.18)),
                                   ),
-                              ],
-                            ),
-                            subtitle: Text('Role: $role', maxLines: 1, overflow: TextOverflow.ellipsis),
-                            tileColor: isMe ? Colors.white.withOpacity(0.03) : null,
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                // Keep dropdown reasonably sized so title stays visible on small screens
-                                SizedBox(
-                                  width: 140,
-                                  child: AbsorbPointer(
-                                    absorbing: !_canEditRoles,
-                                    child: DropdownButtonFormField<String>(
-                                      isExpanded: true,
-                                      value: selectedRole,
-                                      items: roles.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
-                                      onChanged: (val) {
-                                        if (val == null) return;
-                                        // confirm dialog
-                                        showDialog<bool>(
-                                          context: context,
-                                          builder: (ctx) => AlertDialog(
-                                            title: const Text('Confirm role change'),
-                                            content: Text('Change role for $email to "$val"?'),
-                                            actions: [
-                                              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                                              ElevatedButton(
-                                                onPressed: () => Navigator.pop(ctx, true),
-                                                child: const Text('Yes'),
+                                  child: Padding(
+                                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            CircleAvatar(child: Text(name.isNotEmpty ? name[0].toUpperCase() : '?')),
+                                            const SizedBox(width: 10),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    name.isNotEmpty ? name : email,
+                                                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                  if (name.isNotEmpty)
+                                                    Text(
+                                                      email,
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                      style: const TextStyle(fontSize: 13, color: Colors.white70),
+                                                    ),
+                                                ],
                                               ),
-                                            ],
-                                          ),
-                                        ).then((confirmed) {
-                                          if (confirmed == true) {
-                                            _updateRole(uid, val, email);
-                                          }
-                                        });
-                                      },
-                                      decoration: InputDecoration(
-                                        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                                        isDense: true,
-                                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
-                                      ),
+                                            ),
+                                            IconButton(
+                                              icon: const Icon(Icons.copy, size: 20, color: Colors.white70),
+                                              tooltip: 'Copy UID',
+                                              onPressed: () {
+                                                Clipboard.setData(ClipboardData(text: uid));
+                                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('UID copied')));
+                                              },
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Wrap(
+                                          spacing: 8,
+                                          runSpacing: 6,
+                                          children: [
+                                            _metaPill('Role: $role'),
+                                            if (isMe) _metaPill('You', icon: Icons.person),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: AbsorbPointer(
+                                                absorbing: !_canEditRoles,
+                                                child: DropdownButtonFormField<String>(
+                                                  isExpanded: true,
+                                                  value: selectedRole,
+                                                  dropdownColor: _bgEnd,
+                                                  style: const TextStyle(color: Colors.white),
+                                                  items: roles.map((r) => DropdownMenuItem(value: r, child: Text(r))).toList(),
+                                                  onChanged: (val) {
+                                                    if (val == null) return;
+                                                    showDialog<bool>(
+                                                      context: context,
+                                                      builder: (ctx) => AlertDialog(
+                                                        title: const Text('Confirm role change'),
+                                                        content: Text('Change role for $email to \"$val\"?'),
+                                                        actions: [
+                                                          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                                          ElevatedButton(
+                                                            onPressed: () => Navigator.pop(ctx, true),
+                                                            child: const Text('Yes'),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                    ).then((confirmed) {
+                                                      if (confirmed == true) {
+                                                        _updateRole(uid, val, email);
+                                                      }
+                                                    });
+                                                  },
+                                                  decoration: InputDecoration(
+                                                    contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                                    isDense: true,
+                                                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(6)),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            IconButton(
+                                              icon: const Icon(Icons.block, size: 20, color: Colors.redAccent),
+                                              tooltip: roleNorm == 'admin'
+                                                  ? 'Cannot revoke an admin (unless you are Admin)'
+                                                  : 'Revoke approval (user will need approval again)',
+                                              onPressed: (_canEditRoles && roleNorm != 'admin')
+                                                  ? () => _confirmRevokeDialog(uid, email)
+                                                  : (!_canEditRoles ? null : (_isAdmin ? () => _confirmRevokeDialog(uid, email) : null)),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
                                     ),
                                   ),
                                 ),
-                                const SizedBox(width: 8),
-                                IconButton(
-                                  icon: const Icon(Icons.copy, size: 20),
-                                  tooltip: 'Copy UID',
-                                  onPressed: () {
-                                    Clipboard.setData(ClipboardData(text: uid));
-                                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('UID copied')));
-                                  },
-                                ),
-                                const SizedBox(width: 8),
-                                // Revoke approval: disabled for admin role users unless current user is admin
-                                IconButton(
-                                  icon: const Icon(Icons.block, size: 20, color: Colors.red),
-                                  tooltip: roleNorm == 'admin'
-                                      ? 'Cannot revoke an admin (unless you are Admin)'
-                                      : 'Revoke approval (user will need approval again)',
-                                  onPressed: (_canEditRoles && roleNorm != 'admin') ? () => _confirmRevokeDialog(uid, email) : (!_canEditRoles ? null : (_isAdmin ? () => _confirmRevokeDialog(uid, email) : null)),
-                                ),
-                              ],
+                              ),
                             ),
                           );
                         },
@@ -823,8 +1080,16 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
               ],
             ),
           ],
+          ),
         ),
       ),
-    );
+    ],
+  ),
+),
+),
+);
   }
 }
+
+
+

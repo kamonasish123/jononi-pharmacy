@@ -3,14 +3,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'package:jononipharmacy/CompanyDetailPage.dart';
-import 'package:jononipharmacy/Homepage.dart';
-import 'package:jononipharmacy/MedicineAdd.dart';
-import 'package:jononipharmacy/SellPage.dart';
-import 'package:jononipharmacy/companylistpage.dart';
-import 'CustomerDueListPage.dart';
-import 'LowStockPage.dart';
-import 'loginpage.dart';
+import 'home_screen.dart';
+import 'login_screen.dart';
 import 'firebase_options.dart';
 
 Future<void> main() async {
@@ -33,6 +27,13 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.green,
+        appBarTheme: const AppBarTheme(
+          iconTheme: IconThemeData(
+            color: Colors.white,
+            size: 26,
+          ),
+          foregroundColor: Colors.white,
+        ),
       ),
       // RootDecider will listen to Firebase auth state and show the right first screen.
       home: const RootDecider(),
@@ -64,8 +65,14 @@ class RootDecider extends StatelessWidget {
         }
 
         // Otherwise show login page.
-        return loginpage();
+        return LoginPage();
       },
     );
   }
 }
+
+
+
+
+
+

@@ -62,6 +62,12 @@ Try the app directly in your web browser (no installation needed):
 **Demo Login**
 - Email: `demo@jononi.com`
 - Password: `demo1234`
+
+## 🎥 Video Demo
+
+Watch the app walkthrough on YouTube:
+
+👉 [Jononi Pharmacy App – Video Demo](https://youtu.be/66SDQSmUZHc?si=Qj-zw94exVVlMKgV)
 ---
 ## 📦 APK
 

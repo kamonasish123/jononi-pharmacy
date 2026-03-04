@@ -57,7 +57,11 @@ The app is built with **Firebase** and follows clean UI and scalable architectur
 
 Try the app directly in your web browser (no installation needed):
 
-👉 [Click here to launch the live demo](https://appetize.io/app/b_652fig6fnsis3u6jzbt3e6rm34)
+👉 [Click here to launch the live demo](https://appetize.io/app/b_z2tyekdswt26yho43jjqxk43gu)
+
+**Demo Login**
+- Email: `demo@jononi.com`
+- Password: `demo1234`
 ---
 ## 📦 APK
 

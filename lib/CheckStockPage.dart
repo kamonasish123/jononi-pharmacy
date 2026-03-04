@@ -2,6 +2,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 const Color _bgStart = Color(0xFF041A14);
 const Color _bgEnd = Color(0xFF0E5A42);
@@ -90,6 +91,7 @@ class CheckStockPage extends StatefulWidget {
 
 class _CheckStockPageState extends State<CheckStockPage> {
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
+  String currentUserRole = 'seller';
 
   // Threshold options (0 means "All")
   final List<int> _thresholdOptions = [0, 5, 10, 20, 40, 50, 100];
@@ -104,19 +106,56 @@ class _CheckStockPageState extends State<CheckStockPage> {
   Map<String, dynamic>? _foundExisting; // existing doc data if found
   String? _foundDocId;
 
+  @override
+  void initState() {
+    super.initState();
+    _loadMyRole();
+  }
+
+  Future<void> _loadMyRole() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      final doc = await firestore.collection('users').doc(user.uid).get();
+      if (doc.exists) {
+        final data = doc.data();
+        setState(() {
+          currentUserRole = (data?['role'] ?? 'seller').toString();
+        });
+      }
+    } catch (_) {
+      // keep default role
+    }
+  }
+
+  String _normalizeRole(String? role) {
+    if (role == null) return '';
+    return role.toLowerCase().replaceAll(RegExp(r'[\s\-]+'), '_').trim();
+  }
+
+  bool get _canEditPrice {
+    final nr = _normalizeRole(currentUserRole);
+    return nr == 'admin' || nr == 'manager';
+  }
+
+  String _normalizeCompanyKey(String value) {
+    final lower = value.toLowerCase().trim();
+    final stripped = lower.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return stripped.replaceAll('limited', '').replaceAll('ltd', '');
+  }
+
   // Stream that fetches medicines and filters client-side to tolerate mixed-case fields.
   // Returns a Stream<List<QueryDocumentSnapshot>> so we can filter, threshold and sort easily.
   Stream<List<QueryDocumentSnapshot>> getCompanyMedicines() {
-    // We fetch a reasonable number of docs ordered by medicineNameLower.
-    // Adjust limit if you expect more than 500 unique medicines.
     return firestore
         .collection('medicines')
-        .orderBy('medicineNameLower')
-        .limit(1000)
+        .limit(2000)
         .snapshots()
         .map((snap) {
       final wantedUpper = widget.companyName.trim().toUpperCase();
       final wantedSlug = widget.companyId.trim().toLowerCase(); // slug passed from CompanyListPage
+      final wantedNorm = _normalizeCompanyKey(widget.companyName);
+      final wantedSlugNorm = _normalizeCompanyKey(widget.companyId);
 
       // first filter by company (tolerant to different stored fields)
       final matched = snap.docs.where((doc) {
@@ -134,8 +173,13 @@ class _CheckStockPageState extends State<CheckStockPage> {
         final compUpper = rawCompany.toUpperCase();
         final compLower = rawCompany.toLowerCase();
         final compSlug = compLower.replaceAll(' ', '_');
+        final compNorm = _normalizeCompanyKey(rawCompany);
 
-        return compUpper == wantedUpper || compLower == wantedSlug || compSlug == wantedSlug;
+        if (compUpper == wantedUpper || compLower == wantedSlug || compSlug == wantedSlug) return true;
+        if (compNorm == wantedNorm || compNorm == wantedSlugNorm) return true;
+        if (wantedNorm.isNotEmpty && (compNorm.contains(wantedNorm) || wantedNorm.contains(compNorm))) return true;
+        if (wantedSlugNorm.isNotEmpty && (compNorm.contains(wantedSlugNorm) || wantedSlugNorm.contains(compNorm))) return true;
+        return false;
       }).toList();
 
       // apply threshold filter
@@ -265,6 +309,83 @@ class _CheckStockPageState extends State<CheckStockPage> {
       'updatedAt': FieldValue.serverTimestamp(),
     };
     await docRef.update(updates);
+  }
+
+  Future<void> _showEditPriceDialog(DocumentReference docRef, String medName, num currentPrice) async {
+    final currentPriceText = currentPrice.toString();
+    final priceController = TextEditingController(text: currentPriceText);
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return Theme(
+          data: _dialogTheme(context),
+          child: AlertDialog(
+            backgroundColor: _bgEnd,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: Colors.white.withOpacity(0.12)),
+            ),
+            title: const Text('Update Price'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(medName, style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    _infoChip('Current', '\u09F3 $currentPriceText', color: _accent),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: priceController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'New Price'),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: () async {
+                  final newPrice = double.tryParse(priceController.text.trim());
+                  if (newPrice == null || newPrice <= 0) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Enter a valid price (> 0)')),
+                    );
+                    return;
+                  }
+                  try {
+                    await docRef.update({
+                      'price': newPrice,
+                      'updatedAt': FieldValue.serverTimestamp(),
+                    });
+                    if (mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Price updated')));
+                    }
+                  } catch (e) {
+                    if (mounted) {
+                      Navigator.pop(ctx);
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e')));
+                    }
+                  }
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _accent,
+                  foregroundColor: Colors.black,
+                ),
+                child: const Text('Update'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // ----------------- Add dialog UI -----------------
@@ -558,8 +679,8 @@ class _CheckStockPageState extends State<CheckStockPage> {
                             final name = nameController.text.trim();
                             final qty = int.tryParse(qtyController.text.trim()) ?? 0;
                             final price = double.tryParse(priceController.text.trim()) ?? 0.0;
-                            if (name.isEmpty || qty <= 0) {
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter name and quantity > 0')));
+                            if (name.isEmpty || qty < 0) {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter name and quantity >= 0')));
                               return;
                             }
                             setState(() => _addLoading = true);
@@ -708,6 +829,7 @@ class _CheckStockPageState extends State<CheckStockPage> {
                         itemCount: docs.length,
                         itemBuilder: (context, index) {
                           final data = docs[index].data() as Map<String, dynamic>;
+                          final docRef = docs[index].reference;
                           final qty = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
                           final price = data['price'] ?? 0;
                           final medName = (data['medicineName'] ?? data['medicineNameLower'] ?? '').toString();
@@ -791,6 +913,12 @@ class _CheckStockPageState extends State<CheckStockPage> {
                                           ],
                                         ),
                                       ),
+                                      if (_canEditPrice)
+                                        IconButton(
+                                          icon: const Icon(Icons.edit, color: Colors.white70),
+                                          tooltip: 'Edit price',
+                                          onPressed: () => _showEditPriceDialog(docRef, medName, price is num ? price : 0),
+                                        ),
                                     ],
                                   ),
                                 ),

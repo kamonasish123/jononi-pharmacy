@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'registerpage.dart';
 import 'home_screen.dart';
 
@@ -49,6 +50,7 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void initState() {
     super.initState();
+    _loadRememberMe();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       setState(() => _showHeader = true);
@@ -99,6 +101,30 @@ class _LoginPageState extends State<LoginPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _loadRememberMe() async {
+    final prefs = await SharedPreferences.getInstance();
+    final remember = prefs.getBool('remember_me') ?? true;
+    final savedEmail = prefs.getString('remember_email') ?? '';
+
+    if (!mounted) return;
+    setState(() {
+      isChecked = remember;
+      if (savedEmail.isNotEmpty) {
+        emailcontroler.text = savedEmail;
+      }
+    });
+  }
+
+  Future<void> _persistRememberMe(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('remember_me', isChecked);
+    if (isChecked) {
+      await prefs.setString('remember_email', email);
+    } else {
+      await prefs.remove('remember_email');
+    }
   }
 
   bool _looksLikeEmail(String s) {
@@ -397,6 +423,9 @@ class _LoginPageState extends State<LoginPage> {
           // ignore failure to update; admin will still be allowed
         }
       }
+
+      if (!mounted) return;
+      await _persistRememberMe(email);
 
       if (!mounted) return;
       Navigator.pushReplacement(

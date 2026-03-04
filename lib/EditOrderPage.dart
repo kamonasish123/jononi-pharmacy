@@ -344,9 +344,64 @@ class _EditOrderPageState extends State<EditOrderPage> {
     );
   }
 
+  Future<void> _promptReceiveWithPrice(int index) async {
+    final item = items[index];
+    if ((item['received'] ?? false) == true) return;
+    final currentPrice = (item['price'] is num)
+        ? (item['price'] as num).toDouble()
+        : double.tryParse(item['price'].toString()) ?? 0.0;
+    final controller = TextEditingController(text: currentPrice.toString());
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: _bgEnd,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: BorderSide(color: Colors.white.withOpacity(0.12)),
+        ),
+        title: const Text('Receive & Update Price', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(item['name'] ?? '', style: const TextStyle(color: Colors.white70)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Price (৳)'),
+            ),
+            const SizedBox(height: 6),
+            const Text('This updates stock price only (bill price stays same).', style: TextStyle(color: Colors.white54, fontSize: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: _accent, foregroundColor: Colors.black),
+            child: const Text('Receive'),
+          ),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+    final text = controller.text.trim();
+    final newPrice = text.isEmpty ? currentPrice : double.tryParse(text);
+    if (newPrice == null || newPrice < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter a valid price (>= 0)')));
+      return;
+    }
+
+    await _receiveItem(index, priceOverride: newPrice);
+  }
+
   /// Receive a single item: increment medicine stock and quantity in Firestore atomically,
   /// mark item as received locally and persist the order items array (if order exists).
-  Future<void> _receiveItem(int index) async {
+  Future<void> _receiveItem(int index, {double? priceOverride}) async {
     final item = items[index];
     final medId = item['medicineId']?.toString();
     final qty = (item['qty'] is num) ? (item['qty'] as num).toInt() : int.tryParse(item['qty'].toString()) ?? 0;
@@ -371,11 +426,15 @@ class _EditOrderPageState extends State<EditOrderPage> {
         }
 
         // Use FieldValue.increment to avoid overwriting concurrent updates
-        tx.update(medRef, {
+        final updates = <String, dynamic>{
           'stock': FieldValue.increment(qty),
           'quantity': FieldValue.increment(qty),
           'updatedAt': FieldValue.serverTimestamp(),
-        });
+        };
+        if (priceOverride != null) {
+          updates['price'] = priceOverride;
+        }
+        tx.update(medRef, updates);
       });
     } catch (e) {
       setState(() {
@@ -612,7 +671,7 @@ class _EditOrderPageState extends State<EditOrderPage> {
                                 final price = ((data['price'] ?? 0) as num).toString();
                                 return ListTile(
                                   title: Text(medName, style: const TextStyle(color: Colors.white)),
-                                  subtitle: Text('Price: \\u09F3 $price | Stock: $stock', style: const TextStyle(color: Colors.white70)),
+                                  subtitle: Text('Price: \u09F3 $price | Stock: $stock', style: const TextStyle(color: Colors.white70)),
                                   onTap: () async {
                                     await _selectMedicineAndFetchLatest(d.id);
                                     searchController.text = medName;
@@ -756,7 +815,7 @@ class _EditOrderPageState extends State<EditOrderPage> {
                                     ),
                                     const SizedBox(width: 6),
                                     ElevatedButton(
-                                      onPressed: inProgress ? null : () => _receiveItem(index),
+                                      onPressed: inProgress ? null : () => _promptReceiveWithPrice(index),
                                       style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
                                       child: inProgress
                                           ? const SizedBox(

@@ -66,6 +66,7 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
   final TextEditingController companySearchController = TextEditingController();
 
   bool isLoading = false;
+  bool _addExpanded = true;
   Map<String, dynamic>? existingMedicine;
   String? existingDocId;
 
@@ -114,6 +115,12 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
   String _normalizeRole(String? role) {
     if (role == null) return '';
     return role.toLowerCase().replaceAll(RegExp(r'[\s\-]+'), '_').trim();
+  }
+
+  String _normalizeCompanyQuery(String value) {
+    final lower = value.toLowerCase().trim();
+    final stripped = lower.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return stripped.replaceAll('limited', '').replaceAll('ltd', '');
   }
 
   bool get _canDelete {
@@ -395,8 +402,8 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
 
     // If user is searching by company, fetch a broad set and filter client-side
     if (companySearchText.isNotEmpty) {
-      // fetch by medicineNameLower so we get a large set; increase limit if you expect more docs
-      return col.orderBy('medicineNameLower').limit(1000).snapshots();
+      // fetch without ordering to include docs that may not have medicineNameLower
+      return col.limit(2000).snapshots();
     }
 
     if (searchText.isNotEmpty) {
@@ -430,8 +437,11 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
         children: [
           _buildBackdrop(),
           SafeArea(
-            child: Column(
-              children: [
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.only(bottom: 24),
+              keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+              child: Column(
+                children: [
                 // INPUT AREA (only show add/update fields when NOT searching)
                 /* if (!isSearching)
                   Expanded(
@@ -600,81 +610,9 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
                     ),
                   ), */
 
-                if (!isSearching)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
-                    child: _glassCard(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _sectionHeader('Add Medicine', 'Create or update stock', Icons.medical_services),
-                          const SizedBox(height: 14),
-                          field(companyController, "Company Name (optional)", Icons.business),
-                          const SizedBox(height: 10),
-                          field(nameController, "Medicine Name", Icons.medical_services, onChange: (v) {
-                            checkMedicineExists(
-                              v,
-                              companyController.text.isEmpty ? "UNKNOWN" : companyController.text,
-                            );
-                          }),
-                          if (existingMedicine != null) ...[
-                            const SizedBox(height: 10),
-                            Wrap(
-                              spacing: 8,
-                              runSpacing: 8,
-                              children: [
-                                _infoChip(
-                                  'Existing Qty',
-                                  '${(existingMedicine!['quantity'] ?? existingMedicine!['stock'] ?? '')}',
-                                  color: Colors.yellowAccent,
-                                ),
-                                _infoChip(
-                                  'Existing Price',
-                                  '\u09F3 ${(existingMedicine!['price'] ?? '')}',
-                                  color: Colors.yellowAccent,
-                                ),
-                              ],
-                            ),
-                          ],
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: field(qtyController, "Quantity", Icons.confirmation_number, number: true),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: field(priceController, "Price", Icons.attach_money, number: true, decimal: true),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 14),
-                          ElevatedButton.icon(
-                            onPressed: isLoading ? null : saveMedicine,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: _accent,
-                              foregroundColor: Colors.black,
-                              minimumSize: const Size(double.infinity, 48),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                            ),
-                            icon: isLoading
-                                ? const SizedBox(
-                                    width: 20,
-                                    height: 20,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
-                                  )
-                                : const Icon(Icons.check_circle_outline),
-                            label: Text(existingMedicine != null ? "Update Medicine" : "Add Medicine"),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
                 // SEARCH FIELDS (always visible)
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
                   child: _glassCard(
                     padding: const EdgeInsets.all(12),
                     child: Column(
@@ -714,10 +652,98 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
                     ),
                   ),
                 ),
+                if (!isSearching)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+                    child: _glassCard(
+                      padding: EdgeInsets.zero,
+                      child: Theme(
+                        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                        child: ExpansionTile(
+                          initiallyExpanded: _addExpanded,
+                          onExpansionChanged: (v) => setState(() => _addExpanded = v),
+                          tilePadding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                          childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
+                          collapsedIconColor: Colors.white70,
+                          iconColor: _accent,
+                          title: _sectionHeader('Add Medicine', 'Create or update stock', Icons.medical_services),
+                          children: [
+                            field(companyController, "Company Name (optional)", Icons.business),
+                            const SizedBox(height: 10),
+                            field(nameController, "Medicine Name", Icons.medical_services, onChange: (v) {
+                              checkMedicineExists(
+                                v,
+                                companyController.text.isEmpty ? "UNKNOWN" : companyController.text,
+                              );
+                            }),
+                            if (existingMedicine != null) ...[
+                              const SizedBox(height: 10),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  _infoChip(
+                                    'Existing Qty',
+                                    '${(existingMedicine!['quantity'] ?? existingMedicine!['stock'] ?? '')}',
+                                    color: Colors.yellowAccent,
+                                  ),
+                                  _infoChip(
+                                    'Existing Price',
+                                    '\u09F3 ${(existingMedicine!['price'] ?? '')}',
+                                    color: Colors.yellowAccent,
+                                  ),
+                                ],
+                              ),
+                            ],
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: field(qtyController, "Quantity", Icons.confirmation_number, number: true),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: field(priceController, "Price", Icons.attach_money, number: true, decimal: true),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            ElevatedButton.icon(
+                              onPressed: isLoading ? null : saveMedicine,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: _accent,
+                                foregroundColor: Colors.black,
+                                minimumSize: const Size(double.infinity, 48),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                              icon: isLoading
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.check_circle_outline),
+                              label: Text(existingMedicine != null ? "Update Medicine" : "Add Medicine"),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                const SizedBox(height: 6),
 
-                // LIST
-                Expanded(
-                  child: StreamBuilder<QuerySnapshot>(
+                // LIST (only when searching)
+                if (!isSearching)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+                    child: Text(
+                      'Type in the search box to see medicines.',
+                      style: TextStyle(color: Colors.white70),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                else
+                  StreamBuilder<QuerySnapshot>(
                     stream: getMedicines(),
                     builder: (context, snapshot) {
                       if (!snapshot.hasData) {
@@ -733,6 +759,7 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
                         final wantedUpper = wanted.toUpperCase();
                         final wantedLower = wanted.toLowerCase();
                         final wantedSlug = wantedLower.replaceAll(' ', '_');
+                        final wantedNorm = _normalizeCompanyQuery(wanted);
 
                         visibleDocs = docs.where((doc) {
                           final data = doc.data() as Map<String, dynamic>;
@@ -746,10 +773,12 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
                           final compUpper = rawCompany.toUpperCase();
                           final compLower = rawCompany.toLowerCase();
                           final compSlug = compLower.replaceAll(' ', '_');
+                          final compNorm = _normalizeCompanyQuery(rawCompany);
 
                           return compUpper.contains(wantedUpper) ||
                               compLower.contains(wantedLower) ||
-                              compSlug.contains(wantedSlug);
+                              compSlug.contains(wantedSlug) ||
+                              (wantedNorm.isNotEmpty && compNorm.contains(wantedNorm));
                         }).toList();
                       }
 
@@ -759,6 +788,8 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
 
                       return ListView.builder(
                         padding: const EdgeInsets.only(bottom: 120),
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
                         itemCount: visibleDocs.length,
                         itemBuilder: (context, index) {
                           final docSnap = visibleDocs[index];
@@ -855,8 +886,8 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
                       );
                     },
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ],

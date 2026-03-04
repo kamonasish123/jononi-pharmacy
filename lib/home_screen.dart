@@ -1131,6 +1131,7 @@ class _HomePageState extends State<HomePage> {
           key: _scaffoldKey,
           backgroundColor: Colors.transparent,
           extendBodyBehindAppBar: true,
+          resizeToAvoidBottomInset: false,
 
           /// Drawer
           drawer: Drawer(
@@ -1594,20 +1595,21 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
               ),
-              Positioned(
-                left: 0,
-                right: 0,
-                bottom: 6,
-                child: SafeArea(
-                  top: false,
-                  child: Center(
-                    child: Text(
-                      "© Jononi Pharmacy",
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
+              if (MediaQuery.of(context).viewInsets.bottom == 0)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 6,
+                  child: SafeArea(
+                    top: false,
+                    child: Center(
+                      child: Text(
+                        "© Jononi Pharmacy",
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
                     ),
                   ),
                 ),
-              ),
             ],
           ),
         );
@@ -1716,14 +1718,17 @@ class _HomePageState extends State<HomePage> {
             final d = resultsList[i];
             final data = d.data() as Map<String, dynamic>;
             final name = (data['medicineName'] ?? data['medicineNameLower'] ?? data['name'] ?? '').toString();
+            final company = (data['companyName'] ?? data['companyNameUpper'] ?? data['companyNameLower'] ?? '').toString().trim();
             final priceRaw = data['price'] ?? 0;
             final String priceText = (priceRaw is num) ? priceRaw.toString() : priceRaw.toString();
             final stockVal = data['quantity'] ?? data['stock'] ?? data['qty'] ?? 0;
             final int stockInt = (stockVal is num) ? stockVal.toInt() : int.tryParse(stockVal.toString()) ?? 0;
             final String stockText = stockInt.toString();
             final Color stockColor = stockInt <= 0 ? const Color(0xFFFF6B6B) : const Color(0xFF7AE582);
+            const Color companyColor = Color(0xFF9ADBC9);
             const String taka = '\u09F3';
-            Widget infoChip(String label, String value, Color color) {
+            Widget infoChip(String label, String value, Color color, {bool showLabel = true}) {
+              final text = showLabel ? '$label: $value' : label;
               return Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
@@ -1732,7 +1737,7 @@ class _HomePageState extends State<HomePage> {
                   border: Border.all(color: color.withValues(alpha: 0.65)),
                 ),
                 child: Text(
-                  '$label: $value',
+                  text,
                   style: TextStyle(
                     color: color,
                     fontSize: 12,
@@ -1842,6 +1847,8 @@ class _HomePageState extends State<HomePage> {
                                 spacing: 8,
                                 runSpacing: 6,
                                 children: [
+                                  if (company.isNotEmpty)
+                                    infoChip(company, '', companyColor, showLabel: false),
                                   infoChip('Price', '$taka $priceText', _accent),
                                   infoChip('Stock', stockText, stockColor),
                                 ],

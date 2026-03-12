@@ -26,6 +26,7 @@ class _SellPageState extends State<SellPage> {
   String get dateString => DateFormat('yyyy-MM-dd').format(selectedDate);
   double dailyTotal = 0.0;
   String _currentUserRole = 'seller';
+  bool _clearingSellHistory = false;
   static const Color _bgStart = Color(0xFF041A14);
   static const Color _bgEnd = Color(0xFF0E5A42);
   static const Color _accent = Color(0xFFFFD166);
@@ -122,6 +123,90 @@ class _SellPageState extends State<SellPage> {
     );
   }
 
+  Widget _glassCard({required Widget child, EdgeInsetsGeometry? padding}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: padding ?? const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withOpacity(0.18)),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _actionCard({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+    Color? iconColor,
+  }) {
+    final color = iconColor ?? _accent;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(16),
+      child: _glassCard(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Container(
+              width: 42,
+              height: 42,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(icon, color: color),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, color: Colors.white54),
+          ],
+        ),
+      ),
+    );
+  }
+
+  ThemeData _dialogTheme(BuildContext context) {
+    final base = Theme.of(context);
+    return base.copyWith(
+      dialogBackgroundColor: _bgEnd,
+      colorScheme: base.colorScheme.copyWith(
+        surface: _bgEnd,
+        onSurface: Colors.white,
+        primary: _accent,
+      ),
+      textTheme: base.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white),
+      listTileTheme: const ListTileThemeData(
+        textColor: Colors.white,
+        iconColor: Colors.white70,
+      ),
+      iconTheme: const IconThemeData(color: Colors.white70),
+      inputDecorationTheme: const InputDecorationTheme(
+        labelStyle: TextStyle(color: Colors.white70),
+        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white30)),
+        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
+      ),
+      dividerColor: Colors.white24,
+    );
+  }
+
   Future<void> pickDate() async {
     final picked = await showDatePicker(
       context: context,
@@ -130,6 +215,88 @@ class _SellPageState extends State<SellPage> {
       lastDate: DateTime(2100),
     );
     if (picked != null) setState(() => selectedDate = picked);
+  }
+
+  List<DateTime> _datesInRange(DateTime start, DateTime end) {
+    final s = DateTime(start.year, start.month, start.day);
+    final e = DateTime(end.year, end.month, end.day);
+    final days = <DateTime>[];
+    for (var d = s; !d.isAfter(e); d = d.add(const Duration(days: 1))) {
+      days.add(d);
+    }
+    return days;
+  }
+
+  Future<void> _hideCollectionDocs(Query col, {bool Function(QueryDocumentSnapshot)? filter}) async {
+    final snap = await col.get();
+    if (snap.docs.isEmpty) return;
+    WriteBatch batch = firestore.batch();
+    int count = 0;
+    Future<void> flush() async {
+      if (count == 0) return;
+      await batch.commit();
+      batch = firestore.batch();
+      count = 0;
+    }
+    for (final d in snap.docs) {
+      if (filter != null && !filter(d)) continue;
+      final data = d.data() as Map<String, dynamic>? ?? {};
+      if (data['hidden'] == true) continue;
+      batch.update(d.reference, {
+        'hidden': true,
+        'hiddenAt': FieldValue.serverTimestamp(),
+      });
+      count++;
+      if (count >= 450) {
+        await flush();
+      }
+    }
+    await flush();
+  }
+
+  Future<void> _clearSellHistoryRange() async {
+    if (_clearingSellHistory) return;
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2100),
+      initialDateRange: DateTimeRange(start: selectedDate, end: selectedDate),
+    );
+    if (range == null) return;
+
+    setState(() => _clearingSellHistory = true);
+    try {
+      final dates = _datesInRange(range.start, range.end);
+      for (final d in dates) {
+        final dateId = DateFormat('yyyy-MM-dd').format(d);
+        await _hideCollectionDocs(
+          firestore.collection('sales').doc(dateId).collection('bills'),
+        );
+        await _hideCollectionDocs(
+          firestore.collection('due_entries').doc(dateId).collection('entries'),
+        );
+        // only hide company send transactions created from sell page
+        await _hideCollectionDocs(
+          firestore.collection('bkash').doc(dateId).collection('transactions'),
+          filter: (doc) {
+            final data = doc.data() as Map<String, dynamic>? ?? {};
+            final mode = (data['mode'] ?? '').toString();
+            final action = (data['action'] ?? '').toString();
+            final source = (data['source'] ?? '').toString();
+            return mode == 'company' && action == 'send' && source == 'sell';
+          },
+        );
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sales history cleared for selected range')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Clear failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _clearingSellHistory = false);
+    }
   }
 
   Stream<QuerySnapshot> salesStream(String date) {
@@ -148,6 +315,837 @@ class _SellPageState extends State<SellPage> {
         .collection('entries')
         .orderBy('createdAt', descending: true)
         .snapshots();
+  }
+
+  Stream<QuerySnapshot> bkashTxStream(String date) {
+    return firestore.collection('bkash').doc(date).collection('transactions').snapshots();
+  }
+
+  double _computeFinalFromOrderData(Map<String, dynamic> data) {
+    final fa = data['finalAmount'];
+    if (fa is num) return fa.toDouble();
+    if (fa != null) {
+      final v = double.tryParse(fa.toString());
+      if (v != null) return v;
+    }
+
+    final st = data['subTotal'];
+    if (st is num) return st.toDouble();
+    if (st != null) {
+      final v = double.tryParse(st.toString());
+      if (v != null) return v;
+    }
+
+    final items = data['items'];
+    if (items is List) {
+      double sum = 0.0;
+      for (final it in items) {
+        if (it is Map) {
+          final t = it['total'];
+          if (t is num) sum += t.toDouble();
+        }
+      }
+      if (sum > 0) return sum;
+    }
+
+    final paid = (data['paid'] is num) ? (data['paid'] as num).toDouble() : double.tryParse('${data['paid']}') ?? 0.0;
+    final due = (data['due'] is num) ? (data['due'] as num).toDouble() : double.tryParse('${data['due']}') ?? 0.0;
+    return paid + due;
+  }
+
+  String? _companyIdFromOrderPath(String path) {
+    final parts = path.split('/');
+    for (var i = 0; i < parts.length - 1; i++) {
+      if (parts[i] == 'orders') {
+        return parts[i + 1];
+      }
+    }
+    return null;
+  }
+
+  String _normCompanyKey(String v) {
+    return v.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+  }
+
+  bool _matchesCompanyOrderDoc(
+    QueryDocumentSnapshot doc,
+    String companyId, {
+    String? companyName,
+  }) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    final path = doc.reference.path;
+    final dataCid = (data['companyId'] ?? '').toString().trim();
+    final dataName = (data['companyName'] ?? data['company'] ?? '').toString().trim();
+    final byPath = path.contains('/orders/$companyId/bills/');
+    final byId = dataCid.isNotEmpty && dataCid == companyId;
+    final byName = companyName != null &&
+        dataName.isNotEmpty &&
+        _normCompanyKey(dataName) == _normCompanyKey(companyName);
+    return byPath || byId || byName;
+  }
+
+  Future<Map<String, dynamic>> _applyCompanyPayment({
+    required String companyId,
+    required double amount,
+    String? companyName,
+  }) async {
+    // Use collectionGroup matching to ensure we apply to the same orders used for total due.
+    return _applyCompanyPaymentFromCollectionGroup(
+      companyId: companyId,
+      amount: amount,
+      companyName: companyName,
+    );
+  }
+
+  Future<Map<String, dynamic>> _applyCompanyPaymentFromCollectionGroup({
+    required String companyId,
+    required double amount,
+    String? companyName,
+  }) async {
+    final ordersSnap = await firestore.collectionGroup('orders').get();
+    if (ordersSnap.docs.isEmpty) {
+      return {'appliedTotal': 0.0, 'remaining': amount, 'appliedTo': <Map<String, dynamic>>[]};
+    }
+
+    final matched = <QueryDocumentSnapshot>[];
+    for (final d in ordersSnap.docs) {
+      if (_matchesCompanyOrderDoc(d, companyId, companyName: companyName)) {
+        matched.add(d);
+      }
+    }
+
+    if (matched.isEmpty) {
+      return {'appliedTotal': 0.0, 'remaining': amount, 'appliedTo': <Map<String, dynamic>>[]};
+    }
+
+    matched.sort((a, b) {
+      final da = (a.data() as Map<String, dynamic>);
+      final db = (b.data() as Map<String, dynamic>);
+      final ta = da['createdAt'] is Timestamp ? (da['createdAt'] as Timestamp).toDate() : DateTime(1970);
+      final tb = db['createdAt'] is Timestamp ? (db['createdAt'] as Timestamp).toDate() : DateTime(1970);
+      return ta.compareTo(tb);
+    });
+
+    double remaining = amount;
+    final appliedTo = <Map<String, dynamic>>[];
+
+    WriteBatch batch = firestore.batch();
+    int batchCount = 0;
+
+    Future<void> flushBatch() async {
+      if (batchCount == 0) return;
+      await batch.commit();
+      batch = firestore.batch();
+      batchCount = 0;
+    }
+
+    for (final orderDoc in matched) {
+      if (remaining <= 0) break;
+      final data = orderDoc.data() as Map<String, dynamic>? ?? {};
+      final paid = (data['paid'] is num) ? (data['paid'] as num).toDouble() : double.tryParse('${data['paid']}') ?? 0.0;
+      final finalAmt = _computeFinalFromOrderData(data);
+      final due = (data['due'] is num) ? (data['due'] as num).toDouble() : (finalAmt - paid);
+      if (due <= 0) continue;
+
+      final applyNow = remaining > due ? due : remaining;
+      final newPaid = double.parse((paid + applyNow).toStringAsFixed(2));
+      final newDue = double.parse((finalAmt - newPaid).toStringAsFixed(2));
+
+      final updates = <String, dynamic>{
+        'paid': newPaid,
+        'due': newDue < 0 ? 0.0 : newDue,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+      if ((data['companyId'] ?? '').toString().isEmpty) {
+        updates['companyId'] = companyId;
+      }
+      if ((data['companyName'] ?? '').toString().isEmpty && companyName != null) {
+        updates['companyName'] = companyName;
+        updates['companyNameUpper'] = companyName.trim().toUpperCase();
+      }
+
+      batch.update(orderDoc.reference, updates);
+      batchCount++;
+
+      final billDate = orderDoc.reference.parent.parent?.id ?? '';
+      appliedTo.add({'orderId': orderDoc.id, 'billDate': billDate, 'amount': applyNow});
+      remaining = double.parse((remaining - applyNow).toStringAsFixed(2));
+
+      if (batchCount >= 450) {
+        await flushBatch();
+      }
+    }
+
+    await flushBatch();
+    final appliedTotal = double.parse((amount - remaining).toStringAsFixed(2));
+    return {'appliedTotal': appliedTotal, 'remaining': remaining, 'appliedTo': appliedTo};
+  }
+
+  Future<double> _computeCompanyTotalDue(String companyId, {String? companyName}) async {
+    // Use collectionGroup to match the same scope as company list
+    final snap = await firestore.collectionGroup('orders').get();
+    if (snap.docs.isEmpty) return 0.0;
+    double total = 0.0;
+    for (final d in snap.docs) {
+      if (!_matchesCompanyOrderDoc(d, companyId, companyName: companyName)) continue;
+      final data = d.data() as Map<String, dynamic>? ?? {};
+      final paid = (data['paid'] is num) ? (data['paid'] as num).toDouble() : double.tryParse('${data['paid']}') ?? 0.0;
+      final finalAmt = _computeFinalFromOrderData(data);
+      final due = (data['due'] is num) ? (data['due'] as num).toDouble() : (finalAmt - paid);
+      if (due > 0) total += due;
+    }
+    return double.parse(total.toStringAsFixed(2));
+  }
+
+  Future<double> _computeCompanyTotalDueFromCollectionGroup(String companyId) async {
+    final snap = await firestore.collectionGroup('orders').get();
+    if (snap.docs.isEmpty) return 0.0;
+    double total = 0.0;
+    for (final d in snap.docs) {
+      if (!_matchesCompanyOrderDoc(d, companyId)) continue;
+      final data = d.data() as Map<String, dynamic>? ?? {};
+      final paid = (data['paid'] is num) ? (data['paid'] as num).toDouble() : double.tryParse('${data['paid']}') ?? 0.0;
+      final finalAmt = _computeFinalFromOrderData(data);
+      final due = (data['due'] is num) ? (data['due'] as num).toDouble() : (finalAmt - paid);
+      if (due > 0) total += due;
+    }
+    return double.parse(total.toStringAsFixed(2));
+  }
+
+  Future<Map<String, String>?> _selectCompanyDialog(BuildContext ctx, {String initial = ''}) async {
+    String search = initial.toLowerCase();
+    return showDialog<Map<String, String>?>(
+      context: ctx,
+      builder: (dctx) {
+        final controller = TextEditingController(text: initial);
+        return StatefulBuilder(builder: (context, setState) {
+          return Theme(
+            data: _dialogTheme(context),
+            child: AlertDialog(
+              backgroundColor: _bgEnd,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                side: const BorderSide(color: Colors.white24),
+              ),
+              title: const Text('Select Company'),
+              content: SizedBox(
+                width: double.maxFinite,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: controller,
+                      decoration: const InputDecoration(labelText: 'Search company'),
+                      onChanged: (v) => setState(() => search = v.trim().toLowerCase()),
+                    ),
+                    const SizedBox(height: 8),
+                    Flexible(
+                      child: StreamBuilder<QuerySnapshot>(
+                        stream: firestore.collection('medicines').orderBy('companyName').snapshots(),
+                        builder: (context, snap) {
+                          if (!snap.hasData) {
+                            return const Center(child: CircularProgressIndicator());
+                          }
+
+                          final docs = snap.data!.docs;
+                          final set = <String>{};
+
+                          for (final d in docs) {
+                            final data = d.data() as Map<String, dynamic>? ?? {};
+                            final raw = (data['companyName'] ??
+                                    data['companyNameUpper'] ??
+                                    data['companyNameLower'] ??
+                                    '')
+                                .toString()
+                                .trim();
+                            if (raw.isNotEmpty) set.add(raw.toUpperCase());
+                          }
+
+                          final companies = set.toList()..sort();
+                          final filtered = search.isEmpty
+                              ? companies
+                              : companies.where((c) => c.toLowerCase().contains(search)).toList();
+
+                          if (filtered.isEmpty) {
+                            return const Center(child: Text('No companies found'));
+                          }
+
+                          return ListView.separated(
+                            shrinkWrap: true,
+                            itemCount: filtered.length,
+                            separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white24),
+                            itemBuilder: (_, i) {
+                              final name = filtered[i];
+                              final id = name.toLowerCase().replaceAll(' ', '_');
+                              return ListTile(
+                                title: Text(name),
+                                onTap: () => Navigator.pop(context, {'id': id, 'name': name}),
+                              );
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancel')),
+              ],
+            ),
+          );
+        });
+      },
+    );
+  }
+
+  Future<void> _openCompanySendDialog() async {
+    final companyController = TextEditingController();
+    final amountController = TextEditingController();
+    final referenceController = TextEditingController();
+    String? companyId;
+    final submitting = ValueNotifier<bool>(false);
+
+    double? companyTotalDue;
+    bool dueLoading = false;
+    bool didInit = false;
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return Theme(
+          data: _dialogTheme(context),
+          child: AlertDialog(
+            backgroundColor: _bgEnd,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: const BorderSide(color: Colors.white24),
+            ),
+            title: const Text('Company Order — Send'),
+            content: SingleChildScrollView(
+              child: StatefulBuilder(
+                builder: (context, setState) {
+                  if (!didInit) {
+                    didInit = true;
+                    if (companyId != null) {
+                      dueLoading = true;
+                      _computeCompanyTotalDue(companyId!, companyName: companyController.text.trim()).then((v) {
+                        if (!context.mounted) return;
+                        setState(() {
+                          companyTotalDue = v;
+                          dueLoading = false;
+                        });
+                      });
+                    }
+                  }
+
+                  Future<void> refreshDue() async {
+                    if (companyId == null) return;
+                    setState(() => dueLoading = true);
+                    final v = await _computeCompanyTotalDue(companyId!, companyName: companyController.text.trim());
+                    if (!context.mounted) return;
+                    setState(() {
+                      companyTotalDue = v;
+                      dueLoading = false;
+                    });
+                  }
+
+                  return Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: companyController,
+                              readOnly: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Company',
+                                hintText: 'Select company',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            tooltip: 'Pick company',
+                            icon: const Icon(Icons.business),
+                            onPressed: () async {
+                              final pick = await _selectCompanyDialog(context, initial: companyController.text);
+                              if (pick != null) {
+                                companyController.text = pick['name'] ?? '';
+                                companyId = pick['id'];
+                                await refreshDue();
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      if (dueLoading)
+                        Row(
+                          children: const [
+                            SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            SizedBox(width: 8),
+                            Text('Calculating total due...', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                          ],
+                        )
+                      else if (companyTotalDue != null)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: Colors.white24),
+                            ),
+                            child: Text(
+                              'Total Due: ৳ ${companyTotalDue!.toStringAsFixed(2)}',
+                              style: const TextStyle(color: Colors.white70, fontSize: 12),
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: amountController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: const InputDecoration(labelText: 'Amount'),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: referenceController,
+                        decoration: const InputDecoration(labelText: 'Reference (optional)'),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              ValueListenableBuilder<bool>(
+                valueListenable: submitting,
+                builder: (context, isSubmitting, _) {
+                  return ElevatedButton(
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            submitting.value = true;
+                            try {
+                              final companyName = companyController.text.trim();
+                              final amount = double.tryParse(amountController.text.trim()) ?? 0.0;
+
+                              if (companyName.isEmpty) {
+                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Select a company')));
+                                return;
+                              }
+                              if (amount <= 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter a valid amount')));
+                                return;
+                              }
+
+                              final computedCompanyId = companyId ?? companyName.toLowerCase().replaceAll(' ', '_');
+                              final col = firestore.collection('bkash').doc(dateString).collection('transactions');
+
+                              final totalDue = companyTotalDue ??
+                                  await _computeCompanyTotalDue(computedCompanyId, companyName: companyName);
+                              if (totalDue <= 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('No due found for this company')),
+                                );
+                                return;
+                              }
+                              if (amount > totalDue) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Amount exceeds total due (৳ ${totalDue.toStringAsFixed(2)})')),
+                                );
+                                return;
+                              }
+
+                              final txData = <String, dynamic>{
+                                'mode': 'company',
+                                'action': 'send',
+                                'name': companyName,
+                                'companyId': computedCompanyId,
+                                'amount': amount,
+                                'finalAmount': amount,
+                                'reference': referenceController.text.trim().isEmpty ? null : referenceController.text.trim(),
+                                'source': 'sell',
+                                'createdAt': FieldValue.serverTimestamp(),
+                              };
+
+                              final docRef = await col.add(txData);
+
+                              final appliedInfo = await _applyCompanyPayment(
+                                companyId: computedCompanyId,
+                                amount: amount,
+                                companyName: companyName,
+                              );
+
+                              final appliedTo = (appliedInfo['appliedTo'] as List?) ?? [];
+                              final appliedTotal = (appliedInfo['appliedTotal'] as num?)?.toDouble() ?? 0.0;
+                              final remaining = (appliedInfo['remaining'] as num?)?.toDouble() ?? 0.0;
+
+                              await col.doc(docRef.id).update({
+                                'companyAppliedTotal': appliedTotal,
+                                'companyApplied': appliedTotal,
+                                'companyAppliedTo': appliedTo,
+                                'companyOrderId': appliedTo.isNotEmpty ? (appliedTo.first as Map)['orderId'] : null,
+                                'companyBillDate': appliedTo.isNotEmpty ? (appliedTo.first as Map)['billDate'] : null,
+                              });
+
+                              await firestore.collection('company_payments').doc(computedCompanyId).set({
+                                'companyId': computedCompanyId,
+                                'companyName': companyName,
+                                'lastPaidAmount': appliedTotal,
+                                'lastPaidAt': FieldValue.serverTimestamp(),
+                                'lastTxId': docRef.id,
+                              }, SetOptions(merge: true));
+
+                              if (appliedTotal <= 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('No unpaid orders found for this company')),
+                                );
+                              } else if (remaining > 0) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Only ৳ ${(amount - remaining).toStringAsFixed(2)} applied. Remaining ৳ ${remaining.toStringAsFixed(2)} not applied.')),
+                                );
+                              }
+
+                              Navigator.pop(context);
+                            } finally {
+                              submitting.value = false;
+                            }
+                          },
+                    child: const Text('Send'),
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openCustomerDueSendDialog() async {
+    final nameController = TextEditingController();
+    final amountController = TextEditingController();
+    String? selectedCustomerId;
+    Map<String, dynamic>? selectedCustomerData;
+    String search = '';
+    bool addToCustomer = false;
+    final submitting = ValueNotifier<bool>(false);
+
+    await showDialog(
+      context: context,
+      builder: (ctx) {
+        return Theme(
+          data: _dialogTheme(context),
+          child: AlertDialog(
+            backgroundColor: _bgEnd,
+            surfaceTintColor: Colors.transparent,
+            titleTextStyle: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+            contentTextStyle: const TextStyle(color: Colors.white70),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+              side: const BorderSide(color: Colors.white24),
+            ),
+            title: Row(
+              children: const [
+                Icon(Icons.person_add_alt_1, color: _accent),
+                SizedBox(width: 8),
+                Text('Customer Due — Add'),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: StatefulBuilder(
+                builder: (context, setState) {
+                  return SizedBox(
+                    width: double.maxFinite,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                      TextField(
+                        controller: nameController,
+                        style: const TextStyle(color: Colors.white),
+                        decoration: const InputDecoration(
+                          labelText: 'Customer name',
+                          hintText: 'Search or type name',
+                          hintStyle: TextStyle(color: Colors.white54),
+                        ),
+                        onChanged: (v) {
+                          setState(() {
+                            search = v.trim().toLowerCase();
+                            selectedCustomerId = null;
+                            selectedCustomerData = null;
+                          });
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: const Text('Add to customer list'),
+                        subtitle: const Text('If off, it will save only in sales transactions'),
+                        value: addToCustomer,
+                        onChanged: (v) => setState(() => addToCustomer = v),
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        height: 200,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: StreamBuilder<QuerySnapshot>(
+                          stream: firestore
+                              .collection('customers')
+                              .orderBy('nameLower')
+                              .startAt([search.isEmpty ? '' : search])
+                              .endAt([(search.isEmpty ? '' : search) + '\uf8ff'])
+                              .limit(20)
+                              .snapshots(),
+                          builder: (context, snap) {
+                            if (snap.hasError) {
+                              return Center(
+                                child: Text(
+                                  'Failed to load customers',
+                                  style: const TextStyle(color: Colors.white70),
+                                ),
+                              );
+                            }
+                            if (!snap.hasData) {
+                              return const Center(child: CircularProgressIndicator());
+                            }
+                            final docs = snap.data!.docs;
+                            if (docs.isEmpty) {
+                              return const Center(child: Text('No customer found. Type to create.'));
+                            }
+                            return ListView.separated(
+                              itemCount: docs.length,
+                              separatorBuilder: (_, __) => const Divider(height: 1, color: Colors.white24),
+                              itemBuilder: (_, i) {
+                                final d = docs[i];
+                                final data = d.data() as Map<String, dynamic>;
+                                return ListTile(
+                                  title: Text(data['name'] ?? ''),
+                                  subtitle: Text("${data['address'] ?? 'No address'} • ${data['phone'] ?? 'No phone'}"),
+                                  selected: selectedCustomerId == d.id,
+                                  onTap: () {
+                                    selectedCustomerId = d.id;
+                                    selectedCustomerData = data;
+                                    nameController.text = data['name'] ?? '';
+                                    search = (data['nameLower'] ?? '').toString();
+                                    addToCustomer = true;
+                                    setState(() {});
+                                  },
+                                );
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: amountController,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        style: const TextStyle(color: Colors.white),
+                        decoration: const InputDecoration(
+                          labelText: 'Amount',
+                          hintText: 'e.g. 500',
+                          hintStyle: TextStyle(color: Colors.white54),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'If customer is not found, a new one will be created.',
+                          style: TextStyle(color: Colors.white70, fontSize: 12),
+                        ),
+                      ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              ValueListenableBuilder<bool>(
+                valueListenable: submitting,
+                builder: (context, isSubmitting, _) {
+                  return ElevatedButton(
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            submitting.value = true;
+                            try {
+                              final typedName = nameController.text.trim();
+                              final amount = double.tryParse(amountController.text.trim()) ?? 0.0;
+                              if (amount <= 0) {
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(const SnackBar(content: Text('Enter a valid amount')));
+                                return;
+                              }
+
+                              final batch = firestore.batch();
+                              final now = FieldValue.serverTimestamp();
+                              final entryDate = dateString;
+
+                              if (!addToCustomer) {
+                                final displayName = typedName.isEmpty ? 'Unknown' : typedName;
+                                final entryRef =
+                                    firestore.collection('due_entries').doc(entryDate).collection('entries').doc();
+                                batch.set(entryRef, {
+                                  'type': 'due',
+                                  'name': displayName,
+                                  'phone': null,
+                                  'address': null,
+                                  'amount': amount,
+                                  'createdAt': now,
+                                  'source': 'sell',
+                                  'transferred': false,
+                                });
+                                await batch.commit();
+                                if (!mounted) return;
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(this.context).showSnackBar(
+                                  SnackBar(content: Text('Added due \u09F3 ${amount.toStringAsFixed(2)}')),
+                                );
+                                return;
+                              }
+
+                              if (typedName.isEmpty) {
+                                ScaffoldMessenger.of(context)
+                                    .showSnackBar(const SnackBar(content: Text('Enter customer name')));
+                                return;
+                              }
+
+                              DocumentReference<Map<String, dynamic>> custRef;
+                              if (selectedCustomerId != null) {
+                                custRef = firestore.collection('customers').doc(selectedCustomerId!);
+                              } else {
+                                custRef = firestore.collection('customers').doc();
+                              }
+                              final customerId = custRef.id;
+
+                              final snap = await custRef.get();
+                              if (!snap.exists) {
+                                batch.set(custRef, {
+                                  'name': typedName,
+                                  'nameLower': typedName.toLowerCase(),
+                                  'phone': null,
+                                  'address': null,
+                                  'totalDue': amount,
+                                  'balance': 0,
+                                  'createdAt': now,
+                                });
+                                batch.set(custRef.collection('customer_dues').doc(), {
+                                  'type': 'due',
+                                  'amount': amount,
+                                  'createdAt': now,
+                                  'source': 'sell',
+                                });
+                                final entryRef =
+                                    firestore.collection('due_entries').doc(entryDate).collection('entries').doc();
+                                batch.set(entryRef, {
+                                  'type': 'due',
+                                  'customerId': customerId,
+                                  'name': typedName,
+                                  'phone': null,
+                                  'address': null,
+                                  'amount': amount,
+                                  'createdAt': now,
+                                  'source': 'sell',
+                                  'transferred': true,
+                                  'transferredTo': customerId,
+                                });
+                                await batch.commit();
+                                if (!mounted) return;
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(this.context).showSnackBar(
+                                  SnackBar(content: Text('Added due \u09F3 ${amount.toStringAsFixed(2)} for $typedName')),
+                                );
+                                return;
+                              }
+
+                              final curr = snap.data() ?? {};
+                              final currBalance = ((curr['balance'] ?? 0) as num).toDouble();
+                              double remainingDue = amount;
+                              double coveredByBalance = 0.0;
+                              if (currBalance > 0) {
+                                coveredByBalance = currBalance >= amount ? amount : currBalance;
+                                remainingDue = amount - coveredByBalance;
+                              }
+
+                              if (coveredByBalance > 0) {
+                                batch.update(custRef, {'balance': FieldValue.increment(-coveredByBalance)});
+                              }
+
+                              if (remainingDue > 0) {
+                                batch.update(custRef, {'totalDue': FieldValue.increment(remainingDue)});
+                                batch.set(custRef.collection('customer_dues').doc(), {
+                                  'type': 'due',
+                                  'amount': remainingDue,
+                                  'createdAt': now,
+                                  'coveredByBalance': coveredByBalance > 0 ? coveredByBalance : null,
+                                  'source': 'sell',
+                                });
+
+                                final entryRef =
+                                    firestore.collection('due_entries').doc(entryDate).collection('entries').doc();
+                                batch.set(entryRef, {
+                                  'type': 'due',
+                                  'customerId': customerId,
+                                  'name': curr['name'] ?? typedName,
+                                  'phone': curr['phone'] ?? selectedCustomerData?['phone'],
+                                  'address': curr['address'] ?? selectedCustomerData?['address'],
+                                  'amount': remainingDue,
+                                  'createdAt': now,
+                                  'coveredByBalance': coveredByBalance > 0 ? coveredByBalance : null,
+                                  'source': 'sell',
+                                  'transferred': true,
+                                  'transferredTo': customerId,
+                                });
+                              } else {
+                                batch.set(custRef.collection('customer_dues').doc(), {
+                                  'type': 'due_covered_by_balance',
+                                  'amount': amount,
+                                  'coveredByBalance': amount,
+                                  'createdAt': now,
+                                  'source': 'sell',
+                                });
+                              }
+
+                              await batch.commit();
+                              if (!mounted) return;
+                              Navigator.pop(context);
+                              final message = remainingDue > 0
+                                  ? 'Added due \u09F3 ${remainingDue.toStringAsFixed(2)} for $typedName'
+                                  : 'Due covered by balance for $typedName';
+                              ScaffoldMessenger.of(this.context).showSnackBar(SnackBar(content: Text(message)));
+                            } finally {
+                              submitting.value = false;
+                            }
+                          },
+                    child: const Text('Send'),
+                  );
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> shareBill(Map<String, dynamic> billData) async {
@@ -406,29 +1404,77 @@ class _SellPageState extends State<SellPage> {
                       }
                     }
 
-                    return Padding(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 6),
-                          Text(
-                            "Date: $dateString",
-                            style: const TextStyle(color: Colors.white70, fontSize: 12),
-                          ),
-                          if (_canViewDailyTotal) ...[
-                            const SizedBox(height: 10),
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(16),
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.08),
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(color: Colors.white.withOpacity(0.18)),
-                                  ),
+                    return StreamBuilder<QuerySnapshot>(
+                      stream: bkashTxStream(dateString),
+                      builder: (context, bkashSnap) {
+                        final bkashDocs = bkashSnap.data?.docs ?? [];
+                        double totalSend = 0.0;
+                        double customerDueSend = 0.0;
+
+                        for (final d in dueDocs) {
+                          final data = d.data() as Map<String, dynamic>? ?? {};
+                          final type = (data['type'] ?? '').toString();
+                          final source = (data['source'] ?? '').toString();
+                          if (type == 'due' && source == 'sell') {
+                            final amt = data['amount'];
+                            double amount = 0.0;
+                            if (amt is num) {
+                              amount = amt.toDouble();
+                            } else if (amt != null) {
+                              amount = double.tryParse(amt.toString()) ?? 0.0;
+                            }
+                            customerDueSend += amount;
+                          }
+                        }
+
+                        for (final d in bkashDocs) {
+                          final data = d.data() as Map<String, dynamic>? ?? {};
+                          final mode = (data['mode'] ?? '').toString();
+                          final action = (data['action'] ?? '').toString();
+                          final source = (data['source'] ?? '').toString();
+                          if (mode == 'company' && action == 'send' && source == 'sell') {
+                            final amount = ((data['finalAmount'] ?? data['amount'] ?? 0) as num).toDouble();
+                            totalSend += amount;
+                          }
+                        }
+                        totalSend += customerDueSend;
+
+                        final List<Map<String, dynamic>> mergedAll = List<Map<String, dynamic>>.from(merged);
+                        for (final d in bkashDocs) {
+                          final data = d.data() as Map<String, dynamic>? ?? {};
+                          final mode = (data['mode'] ?? '').toString();
+                          final action = (data['action'] ?? '').toString();
+                          final source = (data['source'] ?? '').toString();
+                          if (mode == 'company' && action == 'send' && source == 'sell') {
+                            mergedAll.add({
+                              'kind': 'company_send',
+                              'id': d.id,
+                              'docRef': d.reference,
+                              'createdAt': (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+                              'data': data,
+                            });
+                          }
+                        }
+                        mergedAll.sort((a, b) => (b['createdAt'] as DateTime).compareTo(a['createdAt'] as DateTime));
+
+                        final mergedAllDisplay = mergedAll.where((item) {
+                          final data = item['data'] as Map<String, dynamic>? ?? {};
+                          return data['hidden'] != true;
+                        }).toList();
+
+                        return Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 6),
+                              Text(
+                                "Date: $dateString",
+                                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                              ),
+                              if (_canViewDailyTotal) ...[
+                                const SizedBox(height: 10),
+                                _glassCard(
                                   child: Row(
                                     children: [
                                       Container(
@@ -464,23 +1510,106 @@ class _SellPageState extends State<SellPage> {
                                     ],
                                   ),
                                 ),
+                              ],
+                              if (_canViewDailyTotal) ...[
+                                const SizedBox(height: 10),
+                                _glassCard(
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 40,
+                                        height: 40,
+                                        decoration: BoxDecoration(
+                                          color: Colors.orangeAccent.withOpacity(0.2),
+                                          shape: BoxShape.circle,
+                                          border: Border.all(color: Colors.orangeAccent.withOpacity(0.6)),
+                                        ),
+                                        child: const Icon(Icons.send, color: Colors.orangeAccent),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          const Text("Total Send", style: TextStyle(color: Colors.white70, fontSize: 12)),
+                                          Text(
+                                            "\u09F3 ${totalSend.toStringAsFixed(2)}",
+                                            style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(height: 14),
+                              const Text(
+                                "Transactions",
+                                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
                               ),
-                            ),
-                          ],
-                          const SizedBox(height: 14),
-                          const Text(
-                            "Transactions",
-                            style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 10),
-                          Expanded(
-                            child: merged.isEmpty
-                                ? const Center(child: Text("No records for this day.", style: TextStyle(color: Colors.white70)))
-                                : ListView.builder(
-                                    itemCount: merged.length,
-                                    itemBuilder: (_, index) {
-                                      final item = merged[index];
-                                      if (item['kind'] == 'sale') {
+                              const SizedBox(height: 10),
+                              Expanded(
+                                child: mergedAllDisplay.isEmpty
+                                    ? const Center(child: Text("No records for this day.", style: TextStyle(color: Colors.white70)))
+                                    : ListView.builder(
+                                      itemCount: mergedAllDisplay.length,
+                                      itemBuilder: (_, index) {
+                                        final item = mergedAllDisplay[index];
+                                        if (item['kind'] == 'company_send') {
+                                        final Map<String, dynamic> data = item['data'];
+                                        final name = (data['name'] ?? data['companyName'] ?? 'Unknown').toString();
+                                        final amount = ((data['finalAmount'] ?? data['amount'] ?? 0) as num).toDouble();
+                                        final ref = (data['reference'] ?? '').toString();
+                                        final time = (data['createdAt'] as Timestamp?) != null
+                                            ? DateFormat('dd MMM yyyy, hh:mm a')
+                                                .format((data['createdAt'] as Timestamp).toDate())
+                                            : '';
+
+                                        return Container(
+                                          margin: const EdgeInsets.symmetric(vertical: 6),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white.withOpacity(0.08),
+                                            borderRadius: BorderRadius.circular(16),
+                                            border: Border.all(color: Colors.white.withOpacity(0.16)),
+                                          ),
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(12),
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Row(
+                                                  children: [
+                                                    Container(
+                                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.redAccent.withOpacity(0.2),
+                                                        borderRadius: BorderRadius.circular(999),
+                                                      ),
+                                                      child: const Text(
+                                                        'Company Send',
+                                                        style: TextStyle(
+                                                          color: Colors.redAccent,
+                                                          fontWeight: FontWeight.w700,
+                                                          fontSize: 12,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                    const Spacer(),
+                                                    if (time.isNotEmpty)
+                                                      Text(time, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                                  ],
+                                                ),
+                                                const SizedBox(height: 8),
+                                                Text('Company: $name', style: const TextStyle(color: Colors.white)),
+                                                Text('Amount: \u09F3 ${amount.toStringAsFixed(2)}',
+                                                    style: const TextStyle(color: Colors.white70)),
+                                                if (ref.isNotEmpty)
+                                                  Text('Ref: $ref', style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                        }
+                                        if (item['kind'] == 'sale') {
                                         final Map<String, dynamic> data = item['data'];
                                         final items = (data['items'] as List?) ?? [];
                                         final subTotal = ((data['subTotal'] ?? 0) as num).toDouble();
@@ -799,13 +1928,43 @@ class _SellPageState extends State<SellPage> {
                                       }
                                     },
                                   ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     );
                   },
                 );
               },
+            ),
+          ),
+          Positioned(
+            left: 16,
+            bottom: 16,
+            child: SafeArea(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  FloatingActionButton(
+                    heroTag: 'customer_due_send',
+                    mini: true,
+                    backgroundColor: Colors.orangeAccent,
+                    onPressed: _openCustomerDueSendDialog,
+                    tooltip: 'Customer Due',
+                    child: const Icon(Icons.person_add_alt_1, color: Colors.black),
+                  ),
+                  const SizedBox(height: 10),
+                  FloatingActionButton(
+                    heroTag: 'company_send',
+                    mini: true,
+                    backgroundColor: Colors.redAccent,
+                    onPressed: _openCompanySendDialog,
+                    tooltip: 'Company Send',
+                    child: const Icon(Icons.add, color: Colors.black),
+                  ),
+                ],
+              ),
             ),
           ),
         ],

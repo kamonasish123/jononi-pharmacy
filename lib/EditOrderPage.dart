@@ -78,6 +78,7 @@ class EditOrderPage extends StatefulWidget {
 
 class _EditOrderPageState extends State<EditOrderPage> {
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
+  bool _isSaving = false;
 
   List<Map<String, dynamic>> items = [];
   TextEditingController paidController = TextEditingController(text: "0");
@@ -85,6 +86,7 @@ class _EditOrderPageState extends State<EditOrderPage> {
   Map<String, dynamic>? selectedMedicine;
   String? selectedMedicineId;
   TextEditingController qtyController = TextEditingController();
+  bool _isAdding = false;
 
   // Discount / final amount fields
   // Default discount percent is 10%
@@ -96,6 +98,30 @@ class _EditOrderPageState extends State<EditOrderPage> {
 
   // Prevent double receive requests for the same index
   final Set<int> _receivingInProgress = {};
+
+  ThemeData _dialogTheme(BuildContext context) {
+    final base = Theme.of(context);
+    return base.copyWith(
+      dialogBackgroundColor: _bgEnd,
+      colorScheme: base.colorScheme.copyWith(
+        surface: _bgEnd,
+        onSurface: Colors.white,
+        primary: _accent,
+      ),
+      textTheme: base.textTheme.apply(bodyColor: Colors.white, displayColor: Colors.white),
+      listTileTheme: const ListTileThemeData(
+        textColor: Colors.white,
+        iconColor: Colors.white70,
+      ),
+      iconTheme: const IconThemeData(color: Colors.white70),
+      inputDecorationTheme: const InputDecorationTheme(
+        labelStyle: TextStyle(color: Colors.white70),
+        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Colors.white30)),
+        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: _accent)),
+      ),
+      dividerColor: Colors.white24,
+    );
+  }
 
   @override
   void initState() {
@@ -152,6 +178,12 @@ class _EditOrderPageState extends State<EditOrderPage> {
   }
 
   double get due => finalAmount - paid;
+
+  String _fmtNum(dynamic v) {
+    if (v is num) return v.toStringAsFixed(2);
+    final n = double.tryParse(v.toString());
+    return (n ?? 0.0).toStringAsFixed(2);
+  }
 
   /// Apply a percent discount and update finalAmountController
   void _applyDiscountPercent(int p) {
@@ -265,27 +297,43 @@ class _EditOrderPageState extends State<EditOrderPage> {
     }
   }
 
-  void addToOrder() {
-    if (selectedMedicine == null || qtyController.text.isEmpty) return;
-    final qty = int.tryParse(qtyController.text);
-    final price = double.tryParse(selectedMedicine!['price'].toString()) ?? 0.0;
-    if (qty == null || qty <= 0) return;
+  Future<void> addToOrder() async {
+    if (_isAdding) return;
+    setState(() => _isAdding = true);
+    try {
+      if (selectedMedicine == null || qtyController.text.isEmpty) return;
+      final qty = int.tryParse(qtyController.text);
+      final price = double.tryParse(selectedMedicine!['price'].toString()) ?? 0.0;
+      if (qty == null || qty <= 0) return;
 
-    setState(() {
-      items.add({
-        'medicineId': selectedMedicineId,
-        'name': selectedMedicine!['medicineName'],
-        'qty': qty,
-        'price': price,
-        'total': qty * price,
-        'received': false,
+      setState(() {
+        final existingIndex = items.indexWhere((it) => it['medicineId'] == selectedMedicineId);
+        if (existingIndex >= 0) {
+          // replace qty with new value (allow increase or decrease)
+          items[existingIndex]['qty'] = qty;
+          items[existingIndex]['price'] = price;
+          items[existingIndex]['total'] = qty * price;
+          items[existingIndex]['received'] = items[existingIndex]['received'] ?? false;
+        } else {
+          items.add({
+            'medicineId': selectedMedicineId,
+            'name': selectedMedicine!['medicineName'],
+            'qty': qty,
+            'price': price,
+            'total': qty * price,
+            'received': false,
+          });
+        }
+        finalAmountController.text = _computeFinalFromSubtotal().toStringAsFixed(2);
+        selectedMedicine = null;
+        selectedMedicineId = null;
+        searchController.clear();
+        qtyController.clear();
       });
-      finalAmountController.text = _computeFinalFromSubtotal().toStringAsFixed(2);
-      selectedMedicine = null;
-      selectedMedicineId = null;
-      searchController.clear();
-      qtyController.clear();
-    });
+    } finally {
+      await Future.delayed(const Duration(milliseconds: 300));
+      if (mounted) setState(() => _isAdding = false);
+    }
   }
 
   void editItem(int index) {
@@ -296,50 +344,86 @@ class _EditOrderPageState extends State<EditOrderPage> {
 
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text(items[index]['name']),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: qtyControllerLocal,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: "Quantity"),
+      builder: (_) => Theme(
+        data: _dialogTheme(context),
+        child: StatefulBuilder(
+          builder: (context, setStateDialog) {
+            bool isUpdating = false;
+            return AlertDialog(
+              backgroundColor: _bgEnd,
+              surfaceTintColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: BorderSide(color: Colors.white.withOpacity(0.12)),
+              ),
+              title: Text(items[index]['name'], style: const TextStyle(color: Colors.white)),
+              content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: qtyControllerLocal,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: "Quantity"),
+                ),
+                TextField(
+                  controller: priceController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: "Price"),
+                ),
+              ],
             ),
-            TextField(
-              controller: priceController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: "Price"),
-            ),
-          ],
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
+              TextButton(
+                onPressed: isUpdating
+                    ? null
+                    : () {
+                        setStateDialog(() => isUpdating = true);
+                        final qty = int.tryParse(qtyControllerLocal.text);
+                        final price = double.tryParse(priceController.text);
+                        if (qty == null || price == null) {
+                          setStateDialog(() => isUpdating = false);
+                          return;
+                        }
+                        setState(() {
+                          items[index]['qty'] = qty;
+                          items[index]['price'] = price;
+                          items[index]['total'] = qty * price;
+                          finalAmountController.text = _computeFinalFromSubtotal().toStringAsFixed(2);
+                        });
+                        Navigator.pop(context);
+                      },
+                child: isUpdating
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text("Update"),
+              ),
+              TextButton(
+                onPressed: isUpdating
+                    ? null
+                    : () {
+                        setStateDialog(() => isUpdating = true);
+                        setState(() {
+                          items.removeAt(index);
+                          finalAmountController.text = _computeFinalFromSubtotal().toStringAsFixed(2);
+                        });
+                        Navigator.pop(context);
+                      },
+                child: isUpdating
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.redAccent),
+                      )
+                    : const Text("Delete", style: TextStyle(color: Colors.red)),
+              ),
+            ],
+            );
+          },
         ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              final qty = int.tryParse(qtyControllerLocal.text);
-              final price = double.tryParse(priceController.text);
-              if (qty == null || price == null) return;
-              setState(() {
-                items[index]['qty'] = qty;
-                items[index]['price'] = price;
-                items[index]['total'] = qty * price;
-                finalAmountController.text = _computeFinalFromSubtotal().toStringAsFixed(2);
-              });
-              Navigator.pop(context);
-            },
-            child: const Text("Update"),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                items.removeAt(index);
-                finalAmountController.text = _computeFinalFromSubtotal().toStringAsFixed(2);
-              });
-              Navigator.pop(context);
-            },
-            child: const Text("Delete", style: TextStyle(color: Colors.red)),
-          ),
-        ],
       ),
     );
   }
@@ -354,37 +438,56 @@ class _EditOrderPageState extends State<EditOrderPage> {
 
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: _bgEnd,
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-          side: BorderSide(color: Colors.white.withOpacity(0.12)),
-        ),
-        title: const Text('Receive & Update Price', style: TextStyle(color: Colors.white)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(item['name'] ?? '', style: const TextStyle(color: Colors.white70)),
-            const SizedBox(height: 10),
-            TextField(
-              controller: controller,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Price (৳)'),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setStateDialog) {
+          bool isSubmitting = false;
+          return AlertDialog(
+            backgroundColor: _bgEnd,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: Colors.white.withOpacity(0.12)),
             ),
-            const SizedBox(height: 6),
-            const Text('This updates stock price only (bill price stays same).', style: TextStyle(color: Colors.white54, fontSize: 12)),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: _accent, foregroundColor: Colors.black),
-            child: const Text('Receive'),
-          ),
-        ],
+            title: const Text('Receive & Update Price', style: TextStyle(color: Colors.white)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(item['name'] ?? '', style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: controller,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(labelText: 'Price (৳)'),
+                ),
+                const SizedBox(height: 6),
+                const Text('This updates stock price only (bill price stays same).', style: TextStyle(color: Colors.white54, fontSize: 12)),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSubmitting ? null : () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: isSubmitting
+                    ? null
+                    : () {
+                        setStateDialog(() => isSubmitting = true);
+                        Navigator.pop(context, true);
+                      },
+                style: ElevatedButton.styleFrom(backgroundColor: _accent, foregroundColor: Colors.black),
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                      )
+                    : const Text('Receive'),
+              ),
+            ],
+          );
+        },
       ),
     );
 
@@ -473,13 +576,19 @@ class _EditOrderPageState extends State<EditOrderPage> {
   }
 
   Future<void> saveOrder() async {
+    if (_isSaving) return;
     if (items.isEmpty) return;
 
-    final finalAmt = finalAmount;
-    final paidVal = paid;
-    final dueVal = double.parse((finalAmt - paidVal).toStringAsFixed(2));
+    setState(() => _isSaving = true);
+    try {
+      final finalAmt = finalAmount;
+      final paidVal = paid;
+      final dueVal = double.parse((finalAmt - paidVal).toStringAsFixed(2));
 
     final data = {
+      'companyId': widget.companyId,
+      'companyName': widget.companyName.trim(),
+      'companyNameUpper': widget.companyName.trim().toUpperCase(),
       'items': items,
       'subTotal': subTotal,
       'finalAmount': finalAmt,
@@ -489,32 +598,42 @@ class _EditOrderPageState extends State<EditOrderPage> {
       'createdAt': FieldValue.serverTimestamp(),
     };
 
-    if (widget.orderId != null) {
       await firestore
           .collection('orders')
           .doc(widget.companyId)
           .collection('bills')
           .doc(widget.date)
-          .collection('orders')
-          .doc(widget.orderId)
-          .update(data);
-    } else {
-      await firestore
-          .collection('orders')
-          .doc(widget.companyId)
-          .collection('bills')
-          .doc(widget.date)
-          .collection('orders')
-          .add(data);
+          .set({'createdAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
+
+      if (widget.orderId != null) {
+        await firestore
+            .collection('orders')
+            .doc(widget.companyId)
+            .collection('bills')
+            .doc(widget.date)
+            .collection('orders')
+            .doc(widget.orderId)
+            .update(data);
+      } else {
+        await firestore
+            .collection('orders')
+            .doc(widget.companyId)
+            .collection('bills')
+            .doc(widget.date)
+            .collection('orders')
+            .add(data);
+      }
+
+      setState(() {
+        items.clear();
+        paidController.text = "0";
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Order saved")));
+      Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
-
-    setState(() {
-      items.clear();
-      paidController.text = "0";
-    });
-
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Order saved")));
-    Navigator.pop(context);
   }
 
   /// Optional: share current order as PDF (keeps same font fix as NewOrderPage)
@@ -547,18 +666,18 @@ class _EditOrderPageState extends State<EditOrderPage> {
                     final item = itemsList[i] as Map<String, dynamic>;
                     final name = item['name'] ?? '';
                     final qty = item['qty'] ?? '';
-                    final price = item['price'] ?? '';
-                    final total = item['total'] ?? '';
+                    final price = _fmtNum(item['price']);
+                    final total = _fmtNum(item['total']);
                     return pw.Text("$name $qty x \u09F3 $price = \u09F3 $total", style: pw.TextStyle(font: ttf, fontSize: 12));
                   })
                 else
                   pw.Text("No items", style: pw.TextStyle(font: ttf)),
                 pw.Divider(),
-                pw.Text("Total = \u09F3 ${orderData['subTotal'] ?? 0}", style: pw.TextStyle(font: ttf, fontWeight: pw.FontWeight.bold)),
-                pw.Text("Paid = \u09F3 ${orderData['paid'] ?? 0}", style: pw.TextStyle(font: ttf)),
+                pw.Text("Total = \u09F3 ${_fmtNum(orderData['subTotal'])}", style: pw.TextStyle(font: ttf, fontWeight: pw.FontWeight.bold)),
+                pw.Text("Paid = \u09F3 ${_fmtNum(orderData['paid'])}", style: pw.TextStyle(font: ttf)),
                 // <-- Added final amount line so PDF shows final amount
-                pw.Text("Final = \u09F3 ${finalAmtToShow.toStringAsFixed(2)}", style: pw.TextStyle(font: ttf)),
-                pw.Text("Due = \u09F3 ${orderData['due'] ?? 0}", style: pw.TextStyle(font: ttf)),
+                pw.Text("Final = \u09F3 ${_fmtNum(finalAmtToShow)}", style: pw.TextStyle(font: ttf)),
+                pw.Text("Due = \u09F3 ${_fmtNum(orderData['due'])}", style: pw.TextStyle(font: ttf)),
                 pw.SizedBox(height: 10),
                 pw.Text("${widget.companyName}", style: pw.TextStyle(font: ttf, fontStyle: pw.FontStyle.italic)),
               ],
@@ -700,13 +819,19 @@ class _EditOrderPageState extends State<EditOrderPage> {
                         ),
                         const SizedBox(width: 8),
                         ElevatedButton(
-                          onPressed: addToOrder,
+                          onPressed: _isAdding ? null : addToOrder,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: _accent,
                             foregroundColor: Colors.black,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),
-                          child: const Text("Add"),
+                          child: _isAdding
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                )
+                              : const Text("Add"),
                         ),
                       ],
                     ),
@@ -774,13 +899,19 @@ class _EditOrderPageState extends State<EditOrderPage> {
                         ),
                         const Spacer(),
                         ElevatedButton(
-                          onPressed: saveOrder,
+                          onPressed: _isSaving ? null : saveOrder,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: _accent,
                             foregroundColor: Colors.black,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                           ),
-                          child: const Text("Save Order"),
+                          child: _isSaving
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                )
+                              : const Text("Save Order"),
                         ),
                       ],
                     ),
@@ -794,12 +925,15 @@ class _EditOrderPageState extends State<EditOrderPage> {
                         : ListView.builder(
                             itemCount: items.length,
                             itemBuilder: (_, index) {
+                              final bool canEditSavedOrder = widget.orderId != null;
                               final item = items[index];
                               final bool received = (item['received'] ?? false) == true;
                               final bool inProgress = _receivingInProgress.contains(index);
 
                               Widget trailingWidget;
-                              if (received) {
+                              if (!canEditSavedOrder) {
+                                trailingWidget = const SizedBox.shrink();
+                              } else if (received) {
                                 trailingWidget = const Text(
                                   'Received',
                                   style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold),
@@ -846,18 +980,18 @@ class _EditOrderPageState extends State<EditOrderPage> {
                                       child: ListTile(
                                         title: Text(item['name'] ?? '', style: const TextStyle(color: Colors.white)),
                                         subtitle: Text(
-                                          "${item['qty']} x \u09F3 ${item['price']} = \u09F3 ${(item['total']).toStringAsFixed(2)}",
+                                          "${item['qty']} x \u09F3 ${_fmtNum(item['price'])} = \u09F3 ${_fmtNum(item['total'])}",
                                           style: const TextStyle(color: Colors.white70),
                                         ),
                                         trailing: trailingWidget,
                                         onTap: () {
-                                          if (received) return;
+                                          if (!canEditSavedOrder || received) return;
                                           setState(() {
                                             selectedItemIndex = (selectedItemIndex == index) ? -1 : index;
                                           });
                                         },
                                         onLongPress: () {
-                                          if (received) return;
+                                          if (!canEditSavedOrder || received) return;
                                           editItem(index);
                                         },
                                       ),

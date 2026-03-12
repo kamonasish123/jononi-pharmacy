@@ -4,10 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 
 const Color _bgStart = Color(0xFF041A14);
 const Color _bgEnd = Color(0xFF0E5A42);
 const Color _accent = Color(0xFFFFD166);
+const int _defaultProgressDays = 30;
+const List<int> _progressRangeOptions = [7, 15, 30, 90];
 
 Widget _buildBackdrop() {
   return Stack(
@@ -52,6 +55,109 @@ Widget _buildBackdrop() {
     ],
   );
 }
+
+enum _AdminSection { menu, users, progress, companies, history, bkashCustomers, exchangeHistory }
+
+class _DayPoint {
+  final DateTime day;
+  final double value;
+  const _DayPoint(this.day, this.value);
+}
+
+class _TopMedicine {
+  final String name;
+  final int qty;
+  final double amount;
+  const _TopMedicine(this.name, this.qty, this.amount);
+}
+
+class _TopTx {
+  final String label;
+  final double amount;
+  final DateTime? time;
+  const _TopTx(this.label, this.amount, this.time);
+}
+
+class _ProgressData {
+  final List<_DayPoint> salesSeries;
+  final double totalSales;
+  final List<_TopMedicine> topMedicines;
+  final double totalReceive;
+  final double totalSend;
+  final List<_TopTx> topReceive;
+  final List<_TopTx> topSend;
+  const _ProgressData({
+    required this.salesSeries,
+    required this.totalSales,
+    required this.topMedicines,
+    required this.totalReceive,
+    required this.totalSend,
+    required this.topReceive,
+    required this.topSend,
+  });
+}
+
+class _SalesSparkline extends StatelessWidget {
+  final List<double> values;
+  const _SalesSparkline({required this.values});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomPaint(
+      painter: _SparklinePainter(values: values),
+      size: const Size(double.infinity, 140),
+    );
+  }
+}
+
+class _SparklinePainter extends CustomPainter {
+  final List<double> values;
+  _SparklinePainter({required this.values});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+    final maxVal = values.reduce((a, b) => a > b ? a : b);
+    final paintLine = Paint()
+      ..color = _accent.withOpacity(0.9)
+      ..strokeWidth = 2.2
+      ..style = PaintingStyle.stroke;
+
+    final paintFill = Paint()
+      ..color = _accent.withOpacity(0.18)
+      ..style = PaintingStyle.fill;
+
+    final path = Path();
+    final fillPath = Path();
+
+    final n = values.length;
+    final w = size.width;
+    final h = size.height;
+    for (var i = 0; i < n; i++) {
+      final x = n == 1 ? w / 2 : (w * i / (n - 1));
+      final norm = (maxVal <= 0) ? 0.0 : (values[i] / maxVal);
+      final y = h - (norm * (h * 0.85)) - 6;
+      if (i == 0) {
+        path.moveTo(x, y);
+        fillPath.moveTo(x, h);
+        fillPath.lineTo(x, y);
+      } else {
+        path.lineTo(x, y);
+        fillPath.lineTo(x, y);
+      }
+    }
+    fillPath.lineTo(w, h);
+    fillPath.close();
+
+    canvas.drawPath(fillPath, paintFill);
+    canvas.drawPath(path, paintLine);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SparklinePainter oldDelegate) {
+    return oldDelegate.values != values;
+  }
+}
 class AdminPanelPage extends StatefulWidget {
   const AdminPanelPage({super.key});
 
@@ -68,11 +174,42 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
   String _myRole = 'seller';
   bool _loadingRole = true;
   final TextEditingController _promoteEmailController = TextEditingController();
+  final TextEditingController _companySearchController = TextEditingController();
+  String _companySearchText = '';
+  final TextEditingController _bkashCustomerSearchController = TextEditingController();
+  String _bkashCustomerSearchText = '';
+  final TextEditingController _pharmacySearchController = TextEditingController();
+  String _pharmacySearchText = '';
+  _AdminSection _section = _AdminSection.menu;
+  Future<_ProgressData>? _progressFuture;
+  int _selectedProgressDays = _defaultProgressDays;
+  final Set<String> _resettingCompanies = {};
+  bool _clearingSellHistory = false;
+  bool _clearingBkashHistory = false;
+  final Set<String> _clearingBkashCustomers = {};
+  final Set<String> _resettingBkashCustomers = {};
+  final Set<String> _resettingPharmacies = {};
 
   @override
   void initState() {
     super.initState();
     _loadMyRole();
+    _progressFuture = _loadProgressData(days: _selectedProgressDays);
+    _companySearchController.addListener(() {
+      setState(() {
+        _companySearchText = _companySearchController.text.trim().toLowerCase();
+      });
+    });
+    _bkashCustomerSearchController.addListener(() {
+      setState(() {
+        _bkashCustomerSearchText = _bkashCustomerSearchController.text.trim().toLowerCase();
+      });
+    });
+    _pharmacySearchController.addListener(() {
+      setState(() {
+        _pharmacySearchText = _pharmacySearchController.text.trim().toLowerCase();
+      });
+    });
   }
 
   Future<void> _loadMyRole() async {
@@ -140,6 +277,736 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
         ],
       ),
     );
+  }
+
+  String _dateId(DateTime d) => DateFormat('yyyy-MM-dd').format(d);
+
+  Future<_ProgressData> _loadProgressData({required int days}) async {
+    final now = DateTime.now();
+    final dayList = List<DateTime>.generate(
+      days,
+      (i) => DateTime(now.year, now.month, now.day).subtract(Duration(days: i)),
+    ).reversed.toList();
+
+    final Map<String, double> dailySales = {for (final d in dayList) _dateId(d): 0.0};
+    final Map<String, _TopMedicine> medAgg = {};
+    double totalSales = 0.0;
+
+    for (final d in dayList) {
+      final dateId = _dateId(d);
+      final snap = await firestore.collection('sales').doc(dateId).collection('bills').get();
+      if (snap.docs.isEmpty) continue;
+      double dayTotal = 0.0;
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final paidRaw = data['paid'] ?? data['finalAmount'] ?? data['subTotal'] ?? 0;
+        final paid = (paidRaw is num) ? paidRaw.toDouble() : double.tryParse(paidRaw.toString()) ?? 0.0;
+        dayTotal += paid;
+        totalSales += paid;
+
+        final items = (data['items'] as List?) ?? const [];
+        for (final it in items) {
+          if (it is! Map) continue;
+          final name = (it['name'] ?? it['medicineName'] ?? '').toString().trim();
+          if (name.isEmpty) continue;
+          final qtyRaw = it['qty'] ?? 0;
+          final qty = (qtyRaw is num) ? qtyRaw.toInt() : int.tryParse(qtyRaw.toString()) ?? 0;
+          final amountRaw = it['total'] ?? (it['price'] ?? 0) * qty;
+          final amount = (amountRaw is num)
+              ? amountRaw.toDouble()
+              : double.tryParse(amountRaw.toString()) ?? 0.0;
+          final existing = medAgg[name];
+          if (existing == null) {
+            medAgg[name] = _TopMedicine(name, qty, amount);
+          } else {
+            medAgg[name] = _TopMedicine(
+              name,
+              existing.qty + qty,
+              existing.amount + amount,
+            );
+          }
+        }
+      }
+      dailySales[dateId] = dayTotal;
+    }
+
+    final topMedicines = medAgg.values.toList()
+      ..sort((a, b) => b.qty.compareTo(a.qty));
+
+    // bKash totals + top transactions
+    double totalReceive = 0.0;
+    double totalSend = 0.0;
+    final List<_TopTx> receiveList = [];
+    final List<_TopTx> sendList = [];
+
+    for (final d in dayList) {
+      final dateId = _dateId(d);
+      final snap = await firestore.collection('bkash').doc(dateId).collection('transactions').get();
+      if (snap.docs.isEmpty) continue;
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final type = (data['type'] ?? '').toString().toLowerCase();
+        final amountRaw = data['amount'] ?? data['finalAmount'] ?? 0;
+        final amount = (amountRaw is num) ? amountRaw.toDouble() : double.tryParse(amountRaw.toString()) ?? 0.0;
+        final phone = (data['phone'] ?? data['customerPhone'] ?? '').toString();
+        final name = (data['name'] ?? data['customerName'] ?? '').toString();
+        final label = name.isNotEmpty ? name : (phone.isNotEmpty ? phone : 'Unknown');
+        final ts = data['createdAt'];
+        final dt = ts is Timestamp ? ts.toDate() : null;
+
+        if (type == 'receive') {
+          totalReceive += amount;
+          receiveList.add(_TopTx(label, amount, dt));
+        } else if (type == 'send') {
+          totalSend += amount;
+          sendList.add(_TopTx(label, amount, dt));
+        }
+      }
+    }
+
+    receiveList.sort((a, b) => b.amount.compareTo(a.amount));
+    sendList.sort((a, b) => b.amount.compareTo(a.amount));
+
+    return _ProgressData(
+      salesSeries: dayList
+          .map((d) => _DayPoint(d, dailySales[_dateId(d)] ?? 0.0))
+          .toList(),
+      totalSales: totalSales,
+      topMedicines: topMedicines.take(5).toList(),
+      totalReceive: totalReceive,
+      totalSend: totalSend,
+      topReceive: receiveList.take(3).toList(),
+      topSend: sendList.take(3).toList(),
+    );
+  }
+
+  Widget _glassCard({required Widget child, EdgeInsets padding = const EdgeInsets.all(14)}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Container(
+          padding: padding,
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(0.18)),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _menuTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(18),
+        child: _glassCard(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          child: Row(
+            children: [
+              Container(
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: _accent.withOpacity(0.18),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: _accent.withOpacity(0.45)),
+                ),
+                child: Icon(icon, color: _accent),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600)),
+                    const SizedBox(height: 4),
+                    Text(subtitle, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right, color: Colors.white70),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String text) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      child: Text(
+        text,
+        style: const TextStyle(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  String _money(double v) => v.toStringAsFixed(2);
+
+  String _companyIdFromName(String name) {
+    return name.trim().toLowerCase().replaceAll(RegExp(r'\\s+'), '_');
+  }
+
+  String _normCompanyKey(String v) {
+    return v.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '');
+  }
+
+  String? _companyIdFromOrderPath(String path) {
+    final parts = path.split('/');
+    for (var i = 0; i < parts.length - 1; i++) {
+      if (parts[i] == 'orders') {
+        return parts[i + 1];
+      }
+    }
+    return null;
+  }
+
+  bool _matchesCompanyOrderDocFor(QueryDocumentSnapshot doc, String companyId, String companyName) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    var cid = (data['companyId'] ?? '').toString().trim();
+    if (cid.isEmpty) {
+      cid = _companyIdFromOrderPath(doc.reference.path) ?? '';
+    }
+    if (cid.isNotEmpty && _normCompanyKey(cid) == _normCompanyKey(companyId)) {
+      return true;
+    }
+    final name = (data['companyName'] ?? data['company'] ?? '').toString().trim();
+    if (name.isNotEmpty && _normCompanyKey(name) == _normCompanyKey(companyName)) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _matchesCompanyPaymentDocFor(QueryDocumentSnapshot doc, String companyId, String companyName) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    final mode = (data['mode'] ?? '').toString().trim().toLowerCase();
+    if (mode != 'company') return false;
+    final cid = (data['companyId'] ?? '').toString().trim();
+    if (cid.isNotEmpty && _normCompanyKey(cid) == _normCompanyKey(companyId)) {
+      return true;
+    }
+    final name = (data['name'] ?? data['companyName'] ?? '').toString().trim();
+    if (name.isNotEmpty && _normCompanyKey(name) == _normCompanyKey(companyName)) {
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> _confirmResetCompany(String companyName) async {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Only admin can reset company data.')));
+      return;
+    }
+    final ctrl = TextEditingController();
+    bool isBusy = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Danger: Reset Company'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This will permanently delete ALL orders and company payment history for "$companyName". '
+                'Due will become 0. There is NO UNDO.',
+                style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              const Text('Type RESET to confirm:', style: TextStyle(color: Colors.white70)),
+              TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(hintText: 'RESET'),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: (ctrl.text.trim() == 'RESET' && !isBusy)
+                  ? () {
+                      setState(() => isBusy = true);
+                      Navigator.pop(ctx, true);
+                    }
+                  : null,
+              child: Text(isBusy ? 'Resetting...' : 'Reset'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+    await _resetCompanyForever(companyName);
+  }
+
+  Future<void> _resetCompanyForever(String companyName) async {
+    final companyId = _companyIdFromName(companyName);
+    if (_resettingCompanies.contains(companyId)) return;
+    setState(() => _resettingCompanies.add(companyId));
+    try {
+      // delete orders + bills for this company
+      final ordersSnap = await firestore.collectionGroup('orders').get();
+      final orderRefs = <DocumentReference>[];
+      final billRefs = <DocumentReference>{};
+      for (final d in ordersSnap.docs) {
+        if (!_matchesCompanyOrderDocFor(d, companyId, companyName)) continue;
+        orderRefs.add(d.reference);
+        final billRef = d.reference.parent.parent;
+        if (billRef != null) billRefs.add(billRef);
+      }
+
+      Future<void> deleteRefs(List<DocumentReference> refs) async {
+        WriteBatch batch = firestore.batch();
+        int count = 0;
+        Future<void> flush() async {
+          if (count == 0) return;
+          await batch.commit();
+          batch = firestore.batch();
+          count = 0;
+        }
+        for (final r in refs) {
+          batch.delete(r);
+          count++;
+          if (count >= 450) {
+            await flush();
+          }
+        }
+        await flush();
+      }
+
+      if (orderRefs.isNotEmpty) await deleteRefs(orderRefs);
+      if (billRefs.isNotEmpty) await deleteRefs(billRefs.toList());
+
+      // delete company payment transactions
+      final txSnap = await firestore.collectionGroup('transactions').get();
+      final payRefs = <DocumentReference>[];
+      for (final d in txSnap.docs) {
+        if (_matchesCompanyPaymentDocFor(d, companyId, companyName)) {
+          payRefs.add(d.reference);
+        }
+      }
+      if (payRefs.isNotEmpty) await deleteRefs(payRefs);
+
+      // clear company payments summary
+      await firestore.collection('company_payments').doc(companyId).delete();
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reset completed for $companyName')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reset failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _resettingCompanies.remove(companyId));
+    }
+  }
+
+  List<DateTime> _datesInRange(DateTime start, DateTime end) {
+    final s = DateTime(start.year, start.month, start.day);
+    final e = DateTime(end.year, end.month, end.day);
+    final days = <DateTime>[];
+    for (var d = s; !d.isAfter(e); d = d.add(const Duration(days: 1))) {
+      days.add(d);
+    }
+    return days;
+  }
+
+  Future<void> _hideCollectionDocs(Query col, {bool Function(QueryDocumentSnapshot)? filter}) async {
+    final snap = await col.get();
+    if (snap.docs.isEmpty) return;
+    WriteBatch batch = firestore.batch();
+    int count = 0;
+    Future<void> flush() async {
+      if (count == 0) return;
+      await batch.commit();
+      batch = firestore.batch();
+      count = 0;
+    }
+    for (final d in snap.docs) {
+      if (filter != null && !filter(d)) continue;
+      final data = d.data() as Map<String, dynamic>? ?? {};
+      if (data['hidden'] == true) continue;
+      batch.update(d.reference, {'hidden': true, 'hiddenAt': FieldValue.serverTimestamp()});
+      count++;
+      if (count >= 450) await flush();
+    }
+    await flush();
+  }
+
+  Future<void> _clearSellHistoryRangeAdmin() async {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Only admin can clear history.')));
+      return;
+    }
+    if (_clearingSellHistory) return;
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2100),
+    );
+    if (range == null) return;
+    setState(() => _clearingSellHistory = true);
+    try {
+      final dates = _datesInRange(range.start, range.end);
+      for (final d in dates) {
+        final dateId = DateFormat('yyyy-MM-dd').format(d);
+        await _hideCollectionDocs(
+          firestore.collection('sales').doc(dateId).collection('bills'),
+        );
+        await _hideCollectionDocs(
+          firestore.collection('due_entries').doc(dateId).collection('entries'),
+        );
+        await _hideCollectionDocs(
+          firestore.collection('bkash').doc(dateId).collection('transactions'),
+          filter: (doc) {
+            final data = doc.data() as Map<String, dynamic>? ?? {};
+            final mode = (data['mode'] ?? '').toString();
+            final action = (data['action'] ?? '').toString();
+            final source = (data['source'] ?? '').toString();
+            return mode == 'company' && action == 'send' && source == 'sell';
+          },
+        );
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Sell history cleared for selected range')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Clear failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _clearingSellHistory = false);
+    }
+  }
+
+  Future<void> _clearBkashHistoryRangeAdmin() async {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Only admin can clear history.')));
+      return;
+    }
+    if (_clearingBkashHistory) return;
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2100),
+    );
+    if (range == null) return;
+    setState(() => _clearingBkashHistory = true);
+    try {
+      final dates = _datesInRange(range.start, range.end);
+      for (final d in dates) {
+        final dateId = DateFormat('yyyy-MM-dd').format(d);
+        await _hideCollectionDocs(
+          firestore.collection('bkash').doc(dateId).collection('transactions'),
+        );
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('bKash history cleared for selected range')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Clear failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _clearingBkashHistory = false);
+    }
+  }
+
+  Future<void> _confirmClearBkashCustomerHistory(String id, String name) async {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Only admin can clear history.')));
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Clear history?'),
+        content: Text('Clear all transactions for "$name"? Balance will stay unchanged.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Clear')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await _clearBkashCustomerHistory(id, name);
+    }
+  }
+
+  Future<void> _clearBkashCustomerHistory(String id, String name) async {
+    if (_clearingBkashCustomers.contains(id)) return;
+    setState(() => _clearingBkashCustomers.add(id));
+    try {
+      final txCol = firestore.collection('bkash_customers').doc(id).collection('transactions');
+      final snap = await txCol.get();
+      if (snap.docs.isNotEmpty) {
+        WriteBatch batch = firestore.batch();
+        int count = 0;
+        Future<void> flush() async {
+          if (count == 0) return;
+          await batch.commit();
+          batch = firestore.batch();
+          count = 0;
+        }
+        for (final d in snap.docs) {
+          batch.delete(d.reference);
+          count++;
+          if (count >= 450) await flush();
+        }
+        await flush();
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('History cleared for $name')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Clear failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _clearingBkashCustomers.remove(id));
+    }
+  }
+
+  Future<void> _confirmResetBkashCustomer(String id, String name) async {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Only admin can reset accounts.')));
+      return;
+    }
+    final ctrl = TextEditingController();
+    bool busy = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Danger: Reset Account'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This will permanently delete ALL transactions for "$name" and set balance to 0. '
+                'There is NO UNDO.',
+                style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              const Text('Type RESET to confirm:', style: TextStyle(color: Colors.white70)),
+              TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(hintText: 'RESET'),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: (ctrl.text.trim() == 'RESET' && !busy)
+                  ? () {
+                      setState(() => busy = true);
+                      Navigator.pop(ctx, true);
+                    }
+                  : null,
+              child: Text(busy ? 'Resetting...' : 'Reset'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok == true) {
+      await _resetBkashCustomer(id, name);
+    }
+  }
+
+  Future<void> _resetBkashCustomer(String id, String name) async {
+    if (_resettingBkashCustomers.contains(id)) return;
+    setState(() => _resettingBkashCustomers.add(id));
+    try {
+      final custRef = firestore.collection('bkash_customers').doc(id);
+      final txCol = custRef.collection('transactions');
+      final snap = await txCol.get();
+      if (snap.docs.isNotEmpty) {
+        WriteBatch batch = firestore.batch();
+        int count = 0;
+        Future<void> flush() async {
+          if (count == 0) return;
+          await batch.commit();
+          batch = firestore.batch();
+          count = 0;
+        }
+        for (final d in snap.docs) {
+          batch.delete(d.reference);
+          count++;
+          if (count >= 450) await flush();
+        }
+        await flush();
+      }
+      await custRef.update({
+        'balance': 0.0,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reset completed for $name')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reset failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _resettingBkashCustomers.remove(id));
+    }
+  }
+
+  Future<void> _confirmResetExchangeRange(String pharmacyId, String pharmacyName) async {
+    if (!_isAdmin) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Only admin can reset exchange history.')));
+      return;
+    }
+    if (_resettingPharmacies.contains(pharmacyId)) return;
+
+    final range = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2100),
+    );
+    if (range == null) return;
+
+    final ctrl = TextEditingController();
+    bool busy = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setState) => AlertDialog(
+          title: const Text('Danger: Reset Exchange History'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'This will permanently delete ALL exchange records for "$pharmacyName" '
+                'between ${DateFormat('dd MMM yyyy').format(range.start)} and '
+                '${DateFormat('dd MMM yyyy').format(range.end)}. '
+                'Receive/Send totals for those dates will become 0. There is NO UNDO.',
+                style: const TextStyle(color: Colors.redAccent, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              const Text('Type RESET to confirm:', style: TextStyle(color: Colors.white70)),
+              TextField(
+                controller: ctrl,
+                decoration: const InputDecoration(hintText: 'RESET'),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: (ctrl.text.trim() == 'RESET' && !busy)
+                  ? () {
+                      setState(() => busy = true);
+                      Navigator.pop(ctx, true);
+                    }
+                  : null,
+              child: Text(busy ? 'Resetting...' : 'Reset'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (ok != true) return;
+
+    await _resetExchangeRange(pharmacyId, pharmacyName, range.start, range.end);
+  }
+
+  Future<void> _resetExchangeRange(
+      String pharmacyId, String pharmacyName, DateTime start, DateTime end) async {
+    setState(() => _resettingPharmacies.add(pharmacyId));
+    try {
+      final s = DateTime(start.year, start.month, start.day);
+      final e = DateTime(end.year, end.month, end.day).add(const Duration(days: 1));
+      final recCol = firestore.collection('exchanges').doc(pharmacyId).collection('records');
+      final snap = await recCol
+          .where('createdAt', isGreaterThanOrEqualTo: Timestamp.fromDate(s))
+          .where('createdAt', isLessThan: Timestamp.fromDate(e))
+          .get();
+
+      double sumBorrow = 0.0;
+      double sumPayment = 0.0;
+
+      if (snap.docs.isNotEmpty) {
+        WriteBatch batch = firestore.batch();
+        int count = 0;
+        Future<void> flush() async {
+          if (count == 0) return;
+          await batch.commit();
+          batch = firestore.batch();
+          count = 0;
+        }
+        for (final d in snap.docs) {
+          final data = d.data();
+          final type = (data['type'] ?? '').toString();
+          if (type == 'borrow') {
+            final st = data['subTotal'];
+            final v = (st is num) ? st.toDouble() : double.tryParse(st.toString()) ?? 0.0;
+            sumBorrow += v;
+          } else if (type == 'payment') {
+            final amt = data['amount'];
+            final v = (amt is num) ? amt.toDouble() : double.tryParse(amt.toString()) ?? 0.0;
+            sumPayment += v;
+          }
+          batch.delete(d.reference);
+          count++;
+          if (count >= 450) await flush();
+        }
+        await flush();
+      }
+
+      // Adjust pharmacy totalDue to remain consistent with deleted records.
+      final delta = (-sumBorrow) + (sumPayment);
+      if (delta.abs() > 0.0001) {
+        final pharmRef = firestore.collection('pharmacies').doc(pharmacyId);
+        await firestore.runTransaction((tx) async {
+          final snap = await tx.get(pharmRef);
+          final current = (snap.data()?['totalDue'] ?? 0);
+          final currentDue = (current is num) ? current.toDouble() : double.tryParse(current.toString()) ?? 0.0;
+          double newDue = currentDue + delta;
+          if (newDue < 0) newDue = 0.0;
+          tx.update(pharmRef, {'totalDue': newDue, 'updatedAt': FieldValue.serverTimestamp()});
+        });
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Exchange history reset for $pharmacyName')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Reset failed: $e')));
+      }
+    } finally {
+      if (mounted) setState(() => _resettingPharmacies.remove(pharmacyId));
+    }
   }
 
   /// Helper to check whether the current user (editor) may change target user's role to `newRole`,
@@ -460,7 +1327,783 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
   @override
   void dispose() {
     _promoteEmailController.dispose();
+    _companySearchController.dispose();
+    _bkashCustomerSearchController.dispose();
+    _pharmacySearchController.dispose();
     super.dispose();
+  }
+
+  Widget _buildMenuScaffold() {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        title: const Text('Admin Panel', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        actions: [
+          if (_loadingRole)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Center(child: CircularProgressIndicator(color: Colors.white)),
+            ),
+          if (!_loadingRole)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: Colors.white.withOpacity(0.2)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.verified_user, size: 14, color: _accent),
+                    const SizedBox(width: 6),
+                    Text(
+                      _myRole.toUpperCase(),
+                      style: const TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: ListView(
+              padding: const EdgeInsets.only(top: 8, bottom: 24),
+              children: [
+                _menuTile(
+                  icon: Icons.group,
+                  title: 'Users',
+                  subtitle: 'Approve users, manage roles and access',
+                  onTap: () => setState(() => _section = _AdminSection.users),
+                ),
+                _menuTile(
+                  icon: Icons.business,
+                  title: 'Companies',
+                  subtitle: 'Reset company order & payment history',
+                  onTap: () => setState(() => _section = _AdminSection.companies),
+                ),
+                _menuTile(
+                  icon: Icons.delete_sweep,
+                  title: 'Clear History',
+                  subtitle: 'Clear sell or bKash chat history by date range',
+                  onTap: () => setState(() => _section = _AdminSection.history),
+                ),
+                _menuTile(
+                  icon: Icons.account_balance_wallet,
+                  title: 'Bkash Customer History',
+                  subtitle: 'Clear or reset customer transactions',
+                  onTap: () => setState(() => _section = _AdminSection.bkashCustomers),
+                ),
+                _menuTile(
+                  icon: Icons.handshake,
+                  title: 'Exchange History',
+                  subtitle: 'Reset exchange records by pharmacy & date range',
+                  onTap: () => setState(() => _section = _AdminSection.exchangeHistory),
+                ),
+                _menuTile(
+                  icon: Icons.insights,
+                  title: 'Pharmacy Progress',
+                  subtitle: 'Growth graph, best sales and bKash stats',
+                  onTap: () {
+                    setState(() {
+                      _section = _AdminSection.progress;
+                      _progressFuture = _loadProgressData(days: _selectedProgressDays);
+                    });
+                  },
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                  child: Text(
+                    'More sections coming soon...',
+                    style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProgressScaffold() {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        title: const Text('Pharmacy Progress', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => setState(() => _section = _AdminSection.menu),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh, color: Colors.white70),
+            onPressed: () {
+              setState(() {
+                _progressFuture = _loadProgressData(days: _selectedProgressDays);
+              });
+            },
+          ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: RefreshIndicator(
+              color: _accent,
+              backgroundColor: _bgEnd,
+              onRefresh: () async {
+                setState(() {
+                  _progressFuture = _loadProgressData(days: _selectedProgressDays);
+                });
+                await _progressFuture;
+              },
+              child: FutureBuilder<_ProgressData>(
+                future: _progressFuture,
+                builder: (context, snap) {
+                  if (snap.connectionState == ConnectionState.waiting) {
+                    return const Center(child: CircularProgressIndicator(color: Colors.white));
+                  }
+                  if (snap.hasError || !snap.hasData) {
+                    return ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        SizedBox(height: 120),
+                        Center(child: Text('Failed to load progress', style: TextStyle(color: Colors.white70))),
+                      ],
+                    );
+                  }
+                  final data = snap.data!;
+                  final values = data.salesSeries.map((e) => e.value).toList();
+                  return ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 120),
+                    children: [
+                      _sectionTitle('Time Range'),
+                      _glassCard(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: _progressRangeOptions.map((d) {
+                            final selected = _selectedProgressDays == d;
+                            return ChoiceChip(
+                              label: Text('$d Days'),
+                              selected: selected,
+                              selectedColor: _accent,
+                              backgroundColor: Colors.white.withOpacity(0.08),
+                              labelStyle: TextStyle(
+                                color: selected ? Colors.black : Colors.white70,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              onSelected: (v) {
+                                if (!v) return;
+                                setState(() {
+                                  _selectedProgressDays = d;
+                                  _progressFuture = _loadProgressData(days: d);
+                                });
+                              },
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                      _sectionTitle('Sales Growth (last $_selectedProgressDays days)'),
+                      _glassCard(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Total Sales', style: TextStyle(color: Colors.white70)),
+                            const SizedBox(height: 6),
+                            Text(
+                              '\u09F3 ${_money(data.totalSales)}',
+                              style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                            ),
+                            const SizedBox(height: 12),
+                            SizedBox(height: 140, child: _SalesSparkline(values: values)),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _glassCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('bKash Receive', style: TextStyle(color: Colors.white70)),
+                                  const SizedBox(height: 6),
+                                  Text('\u09F3 ${_money(data.totalReceive)}',
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _glassCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('bKash Send', style: TextStyle(color: Colors.white70)),
+                                  const SizedBox(height: 6),
+                                  Text('\u09F3 ${_money(data.totalSend)}',
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      _sectionTitle('Best Selling Medicines'),
+                      _glassCard(
+                        child: data.topMedicines.isEmpty
+                            ? const Text('No sales yet', style: TextStyle(color: Colors.white70))
+                            : Column(
+                                children: data.topMedicines.map((m) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 6),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            m.name,
+                                            style: const TextStyle(color: Colors.white),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        _metaPill('Qty: ${m.qty}', color: _accent),
+                                        const SizedBox(width: 6),
+                                        _metaPill('\u09F3 ${_money(m.amount)}'),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                      ),
+                      _sectionTitle('Best bKash Receive'),
+                      _glassCard(
+                        child: data.topReceive.isEmpty
+                            ? const Text('No receive transactions', style: TextStyle(color: Colors.white70))
+                            : Column(
+                                children: data.topReceive.map((t) {
+                                  final time = t.time != null ? DateFormat('dd MMM, hh:mm a').format(t.time!) : '';
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 6),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(t.label, style: const TextStyle(color: Colors.white)),
+                                        ),
+                                        if (time.isNotEmpty)
+                                          Text(time, style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                                        const SizedBox(width: 8),
+                                        _metaPill('\u09F3 ${_money(t.amount)}', color: Colors.greenAccent),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                      ),
+                      _sectionTitle('Best bKash Send'),
+                      _glassCard(
+                        child: data.topSend.isEmpty
+                            ? const Text('No send transactions', style: TextStyle(color: Colors.white70))
+                            : Column(
+                                children: data.topSend.map((t) {
+                                  final time = t.time != null ? DateFormat('dd MMM, hh:mm a').format(t.time!) : '';
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 6),
+                                    child: Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(t.label, style: const TextStyle(color: Colors.white)),
+                                        ),
+                                        if (time.isNotEmpty)
+                                          Text(time, style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                                        const SizedBox(width: 8),
+                                        _metaPill('\u09F3 ${_money(t.amount)}', color: Colors.redAccent),
+                                      ],
+                                    ),
+                                  );
+                                }).toList(),
+                              ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompaniesScaffold() {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        title: const Text('Company Control', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => setState(() => _section = _AdminSection.menu),
+        ),
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                  child: _glassCard(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: TextField(
+                      controller: _companySearchController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        hintText: 'Search company',
+                        hintStyle: TextStyle(color: Colors.white70),
+                        prefixIcon: Icon(Icons.search, color: Colors.white70),
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: firestore.collection('medicines').snapshots(),
+                    builder: (context, snap) {
+                      if (!snap.hasData) {
+                        return const Center(child: CircularProgressIndicator(color: Colors.white));
+                      }
+                      final docs = snap.data!.docs;
+                      final companySet = <String>{};
+                      for (final d in docs) {
+                        final data = d.data() as Map<String, dynamic>;
+                        final name = (data['companyName'] ?? '').toString().trim();
+                        if (name.isNotEmpty) {
+                          companySet.add(name.toUpperCase());
+                        }
+                      }
+                      final companies = companySet.toList()..sort();
+                      final filtered = _companySearchText.isEmpty
+                          ? companies
+                          : companies.where((c) => c.contains(_companySearchText.toUpperCase())).toList();
+
+                      if (filtered.isEmpty) {
+                        return const Center(child: Text('No companies found', style: TextStyle(color: Colors.white70)));
+                      }
+
+                      return ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 120, top: 8),
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 6),
+                        itemBuilder: (_, i) {
+                          final company = filtered[i];
+                          final companyId = _companyIdFromName(company);
+                          final isResetting = _resettingCompanies.contains(companyId);
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: _glassCard(
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      company,
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ElevatedButton(
+                                    onPressed: (!_isAdmin || isResetting) ? null : () => _confirmResetCompany(company),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.redAccent,
+                                      foregroundColor: Colors.white,
+                                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                    ),
+                                    child: Text(isResetting ? 'Resetting...' : 'Reset'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                if (!_isAdmin)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text('Only admin can reset company data.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistoryScaffold() {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        title: const Text('Clear History', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => setState(() => _section = _AdminSection.menu),
+        ),
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              children: [
+                _sectionTitle('Sell Page'),
+                _glassCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Clear sell page chat/transaction history by date range. '
+                        'Totals remain unchanged.',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      const SizedBox(height: 10),
+                      ElevatedButton.icon(
+                        onPressed: (_isAdmin && !_clearingSellHistory) ? _clearSellHistoryRangeAdmin : null,
+                        icon: const Icon(Icons.delete_sweep),
+                        label: Text(_clearingSellHistory ? 'Clearing...' : 'Clear Sell History'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _sectionTitle('bKash Page'),
+                _glassCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Clear bKash transaction history by date range. '
+                        'Totals remain unchanged.',
+                        style: TextStyle(color: Colors.white70, fontSize: 12),
+                      ),
+                      const SizedBox(height: 10),
+                      ElevatedButton.icon(
+                        onPressed: (_isAdmin && !_clearingBkashHistory) ? _clearBkashHistoryRangeAdmin : null,
+                        icon: const Icon(Icons.delete_sweep),
+                        label: Text(_clearingBkashHistory ? 'Clearing...' : 'Clear bKash History'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.redAccent,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (!_isAdmin)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Text('Only admin can clear history.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBkashCustomerHistoryScaffold() {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        title: const Text('Bkash Customer History', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => setState(() => _section = _AdminSection.menu),
+        ),
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                  child: _glassCard(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: TextField(
+                      controller: _bkashCustomerSearchController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        hintText: 'Search customer',
+                        hintStyle: TextStyle(color: Colors.white70),
+                        prefixIcon: Icon(Icons.search, color: Colors.white70),
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: firestore.collection('bkash_customers').orderBy('nameLower').snapshots(),
+                    builder: (context, snap) {
+                      if (!snap.hasData) {
+                        return const Center(child: CircularProgressIndicator(color: Colors.white));
+                      }
+                      final docs = snap.data!.docs;
+                      if (docs.isEmpty) {
+                        return const Center(child: Text('No customers found', style: TextStyle(color: Colors.white70)));
+                      }
+                      final filtered = docs.where((d) {
+                        if (_bkashCustomerSearchText.isEmpty) return true;
+                        final data = d.data() as Map<String, dynamic>? ?? {};
+                        final name = (data['name'] ?? '').toString().toLowerCase();
+                        final phone = (data['phone'] ?? '').toString().toLowerCase();
+                        return name.contains(_bkashCustomerSearchText) || phone.contains(_bkashCustomerSearchText);
+                      }).toList();
+
+                      if (filtered.isEmpty) {
+                        return const Center(child: Text('No customers match', style: TextStyle(color: Colors.white70)));
+                      }
+
+                      return ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 120, top: 8),
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 6),
+                        itemBuilder: (_, i) {
+                          final doc = filtered[i];
+                          final data = doc.data() as Map<String, dynamic>? ?? {};
+                          final id = doc.id;
+                          final name = (data['name'] ?? 'Unknown').toString();
+                          final phone = (data['phone'] ?? '').toString();
+                          final balanceRaw = data['balance'] ?? 0;
+                          final balance = (balanceRaw is num)
+                              ? balanceRaw.toDouble()
+                              : double.tryParse(balanceRaw.toString()) ?? 0.0;
+                          final isClearing = _clearingBkashCustomers.contains(id);
+                          final isResetting = _resettingBkashCustomers.contains(id);
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: _glassCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                                  if (phone.isNotEmpty)
+                                    Text(phone, style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                  const SizedBox(height: 6),
+                                  Text('Balance: \u09F3 ${balance.toStringAsFixed(2)}',
+                                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: ElevatedButton(
+                                          onPressed: (!_isAdmin || isClearing || isResetting)
+                                              ? null
+                                              : () => _confirmClearBkashCustomerHistory(id, name),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.blueGrey,
+                                            foregroundColor: Colors.white,
+                                          ),
+                                          child: Text(isClearing ? 'Clearing...' : 'Clear Chat'),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: ElevatedButton(
+                                          onPressed: (!_isAdmin || isClearing || isResetting)
+                                              ? null
+                                              : () => _confirmResetBkashCustomer(id, name),
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: Colors.redAccent,
+                                            foregroundColor: Colors.white,
+                                          ),
+                                          child: Text(isResetting ? 'Resetting...' : 'Reset'),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                if (!_isAdmin)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text('Only admin can clear or reset customers.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildExchangeHistoryScaffold() {
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      extendBodyBehindAppBar: true,
+      appBar: AppBar(
+        title: const Text('Exchange History', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+        centerTitle: true,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => setState(() => _section = _AdminSection.menu),
+        ),
+      ),
+      body: Stack(
+        children: [
+          _buildBackdrop(),
+          SafeArea(
+            child: Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+                  child: _glassCard(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: TextField(
+                      controller: _pharmacySearchController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        hintText: 'Search pharmacy',
+                        hintStyle: TextStyle(color: Colors.white70),
+                        prefixIcon: Icon(Icons.search, color: Colors.white70),
+                        border: InputBorder.none,
+                      ),
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: StreamBuilder<QuerySnapshot>(
+                    stream: firestore.collection('pharmacies').orderBy('nameLower').snapshots(),
+                    builder: (context, snap) {
+                      if (!snap.hasData) {
+                        return const Center(child: CircularProgressIndicator(color: Colors.white));
+                      }
+                      final docs = snap.data!.docs;
+                      if (docs.isEmpty) {
+                        return const Center(child: Text('No pharmacies found', style: TextStyle(color: Colors.white70)));
+                      }
+                      final filtered = docs.where((d) {
+                        if (_pharmacySearchText.isEmpty) return true;
+                        final data = d.data() as Map<String, dynamic>? ?? {};
+                        final name = (data['name'] ?? '').toString().toLowerCase();
+                        return name.contains(_pharmacySearchText);
+                      }).toList();
+
+                      if (filtered.isEmpty) {
+                        return const Center(child: Text('No pharmacies match', style: TextStyle(color: Colors.white70)));
+                      }
+
+                      return ListView.separated(
+                        padding: const EdgeInsets.only(bottom: 120, top: 8),
+                        itemCount: filtered.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 6),
+                        itemBuilder: (_, i) {
+                          final doc = filtered[i];
+                          final data = doc.data() as Map<String, dynamic>? ?? {};
+                          final id = doc.id;
+                          final name = (data['name'] ?? 'Unknown').toString();
+                          final dueRaw = data['totalDue'] ?? 0;
+                          final due = (dueRaw is num) ? dueRaw.toDouble() : double.tryParse(dueRaw.toString()) ?? 0.0;
+                          final isResetting = _resettingPharmacies.contains(id);
+
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: _glassCard(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+                                  const SizedBox(height: 4),
+                                  Text('Current Due: \u09F3 ${due.toStringAsFixed(2)}',
+                                      style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                                  const SizedBox(height: 10),
+                                  ElevatedButton.icon(
+                                    onPressed: (!_isAdmin || isResetting)
+                                        ? null
+                                        : () => _confirmResetExchangeRange(id, name),
+                                    icon: const Icon(Icons.delete_sweep),
+                                    label: Text(isResetting ? 'Resetting...' : 'Reset by Date Range'),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: Colors.redAccent,
+                                      foregroundColor: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  ),
+                ),
+                if (!_isAdmin)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text('Only admin can reset exchange history.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -490,6 +2133,25 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
       ),
     );
 
+    if (_section == _AdminSection.menu) {
+      return Theme(data: theme, child: _buildMenuScaffold());
+    }
+    if (_section == _AdminSection.progress) {
+      return Theme(data: theme, child: _buildProgressScaffold());
+    }
+    if (_section == _AdminSection.companies) {
+      return Theme(data: theme, child: _buildCompaniesScaffold());
+    }
+    if (_section == _AdminSection.history) {
+      return Theme(data: theme, child: _buildHistoryScaffold());
+    }
+    if (_section == _AdminSection.bkashCustomers) {
+      return Theme(data: theme, child: _buildBkashCustomerHistoryScaffold());
+    }
+    if (_section == _AdminSection.exchangeHistory) {
+      return Theme(data: theme, child: _buildExchangeHistoryScaffold());
+    }
+
     return Theme(
       data: theme,
       child: DefaultTabController(
@@ -498,6 +2160,10 @@ class _AdminPanelPageState extends State<AdminPanelPage> {
           backgroundColor: Colors.transparent,
           extendBodyBehindAppBar: true,
           appBar: AppBar(
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => setState(() => _section = _AdminSection.menu),
+            ),
             title: const Text(
               'Admin Panel - Users',
               style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),

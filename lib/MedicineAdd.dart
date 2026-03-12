@@ -290,6 +290,8 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
 
   // ---------------- SAVE MEDICINE ----------------
   Future<void> saveMedicine() async {
+    if (isLoading) return;
+    setState(() => isLoading = true);
     final rawName = nameController.text.trim();
     final name = rawName;
     final nameLower = name.toLowerCase();
@@ -299,6 +301,7 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
 
     if (name.isEmpty || qtyController.text.isEmpty || priceController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Fill all required fields")));
+      setState(() => isLoading = false);
       return;
     }
 
@@ -307,10 +310,9 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
 
     if (qty == null || price == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Invalid quantity or price")));
+      setState(() => isLoading = false);
       return;
     }
-
-    setState(() => isLoading = true);
 
     try {
       // Try to find an existing document (robust against old/new field names)
@@ -374,26 +376,48 @@ class _MedicineAddPageState extends State<MedicineAddPage> {
       return;
     }
 
-    final ok = await showDialog<bool>(
+    await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete medicine?'),
-        content: Text('Permanently delete "$displayName" from database? This cannot be undone.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
-        ],
+      builder: (_) => StatefulBuilder(
+        builder: (context, setState) {
+          bool isDeleting = false;
+          return AlertDialog(
+            title: const Text('Delete medicine?'),
+            content: Text('Permanently delete "$displayName" from database? This cannot be undone.'),
+            actions: [
+              TextButton(
+                onPressed: isDeleting ? null : () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: isDeleting
+                    ? null
+                    : () async {
+                        setState(() => isDeleting = true);
+                        try {
+                          await docRef.delete();
+                          if (!context.mounted) return;
+                          Navigator.pop(context, true);
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Deleted')));
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          Navigator.pop(context, false);
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+                        }
+                      },
+                child: isDeleting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                      )
+                    : const Text('Delete'),
+              ),
+            ],
+          );
+        },
       ),
     );
-
-    if (ok != true) return;
-
-    try {
-      await docRef.delete();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Deleted')));
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
-    }
   }
 
   // ---------------- STREAM (PREFIX SEARCH FIXED) ----------------

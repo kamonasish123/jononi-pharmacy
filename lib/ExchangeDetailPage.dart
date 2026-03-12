@@ -67,6 +67,8 @@ class ExchangeDetailPage extends StatefulWidget {
 
 class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
+  bool _isBorrowDialogOpen = false;
+  bool _isPaymentDialogOpen = false;
   DateTime selectedDate = DateTime.now();
   String get dateString => DateFormat('yyyy-MM-dd').format(selectedDate);
 
@@ -122,6 +124,8 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
 
   // ----------------- Create a borrow/lend transaction (multiple items) -----------------
   Future<void> createBorrowTransaction() async {
+    if (_isBorrowDialogOpen) return;
+    setState(() => _isBorrowDialogOpen = true);
     List<Map<String, dynamic>> pickedItems = [];
 
     final qtyController = TextEditingController();
@@ -134,7 +138,10 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
     // false => give to pharmacy (you give items -> your stock decreases)
     bool isReceive = true;
 
-    await showDialog(
+    bool isSubmitting = false;
+    bool isAdding = false;
+    try {
+      await showDialog(
       context: context,
       builder: (ctx) {
         return StatefulBuilder(builder: (context, setState) {
@@ -350,35 +357,44 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                           const SizedBox(width: 8),
                           // Add button: disabled when no selection or when trying to give more than latestAvailable
                           ElevatedButton(
-                            onPressed: (selectedMed == null)
+                            onPressed: (selectedMed == null || isAdding)
                                 ? null
                                 : () {
-                              final qty = int.tryParse(qtyController.text.trim()) ?? 0;
-                              if (!isReceive && qty > latestAvailable) {
-                                showDialog(
-                                  context: context,
-                                  builder: (_) => Theme(
-                                    data: _dialogTheme(context),
-                                    child: AlertDialog(
-                                      backgroundColor: _bgEnd,
-                                      surfaceTintColor: Colors.transparent,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(20),
-                                        side: BorderSide(color: Colors.white24),
-                                      ),
-                                      title: const Text('Insufficient stock'),
-                                      content: Text('Cannot give $qty items. Available stock: $latestAvailable.'),
-                                      actions: [
-                                        TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                                return;
-                              }
-                              addPicked();
-                            },
-                            child: const Text('Add'),
+                                    setState(() => isAdding = true);
+                                    final qty = int.tryParse(qtyController.text.trim()) ?? 0;
+                                    if (!isReceive && qty > latestAvailable) {
+                                      showDialog(
+                                        context: context,
+                                        builder: (_) => Theme(
+                                          data: _dialogTheme(context),
+                                          child: AlertDialog(
+                                            backgroundColor: _bgEnd,
+                                            surfaceTintColor: Colors.transparent,
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(20),
+                                              side: BorderSide(color: Colors.white24),
+                                            ),
+                                            title: const Text('Insufficient stock'),
+                                            content: Text('Cannot give $qty items. Available stock: $latestAvailable.'),
+                                            actions: [
+                                              TextButton(onPressed: () => Navigator.pop(context), child: const Text('OK')),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                      setState(() => isAdding = false);
+                                      return;
+                                    }
+                                    addPicked();
+                                    setState(() => isAdding = false);
+                                  },
+                            child: isAdding
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                  )
+                                : const Text('Add'),
                           ),
                         ],
                       ),
@@ -413,9 +429,10 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
             actions: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               ElevatedButton(
-                onPressed: pickedItems.isEmpty
+                onPressed: pickedItems.isEmpty || isSubmitting
                     ? null
                     : () async {
+                  setState(() => isSubmitting = true);
                   // calculate subtotal
                   final subTotal = pickedItems.fold<double>(0, (s, e) => s + ((e['total'] ?? 0) as num).toDouble());
 
@@ -512,9 +529,19 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                         ),
                       ),
                     );
+                  } finally {
+                    if (context.mounted) {
+                      setState(() => isSubmitting = false);
+                    }
                   }
                 },
-                child: const Text('Save'),
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                      )
+                    : const Text('Save'),
               )
             ],
           ),
@@ -522,16 +549,22 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
         });
       },
     );
+    } finally {
+      if (mounted) setState(() => _isBorrowDialogOpen = false);
+    }
   }
 
   // ----------------- Record payment from pharmacy -----------------
   // Payment dialog: if cash -> create a sales bill for today (SellPage will show it and add to daily total).
   // If not cash -> only reduce pharmacy.due; no sales bill created.
   Future<void> recordPayment() async {
+    if (_isPaymentDialogOpen) return;
+    setState(() => _isPaymentDialogOpen = true);
     final amountController = TextEditingController();
     bool isCash = true;
-
-    await showDialog(
+    bool isSubmitting = false;
+    try {
+      await showDialog(
       context: context,
       builder: (_) {
         return StatefulBuilder(builder: (context, setState) {
@@ -569,9 +602,15 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
             actions: [
               TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               ElevatedButton(
-                onPressed: () async {
+                onPressed: isSubmitting
+                    ? null
+                    : () async {
+                  setState(() => isSubmitting = true);
                   final amount = double.tryParse(amountController.text.trim());
-                  if (amount == null || amount <= 0) return;
+                  if (amount == null || amount <= 0) {
+                    setState(() => isSubmitting = false);
+                    return;
+                  }
 
                   final batch = firestore.batch();
 
@@ -604,18 +643,30 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
                     });
                   }
 
-                  await batch.commit();
-                  Navigator.pop(context);
+                  try {
+                    await batch.commit();
+                    Navigator.pop(context);
 
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(isCash
-                          ? 'Payment recorded and added to sales'
-                          : 'Payment recorded (non-cash); no sale created'),
-                    ),
-                  );
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(isCash
+                            ? 'Payment recorded and added to sales'
+                            : 'Payment recorded (non-cash); no sale created'),
+                      ),
+                    );
+                  } finally {
+                    if (context.mounted) {
+                      setState(() => isSubmitting = false);
+                    }
+                  }
                 },
-                child: const Text('Submit'),
+                child: isSubmitting
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                      )
+                    : const Text('Submit'),
               ),
             ],
           ),
@@ -623,6 +674,9 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
         });
       },
     );
+    } finally {
+      if (mounted) setState(() => _isPaymentDialogOpen = false);
+    }
   }
 
   Future<void> _deleteRecord(DocumentReference recRef) async {
@@ -734,7 +788,7 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
             heroTag: 'borrow',
             backgroundColor: Colors.orangeAccent,
             child: const Icon(Icons.call_split),
-            onPressed: createBorrowTransaction,
+            onPressed: _isBorrowDialogOpen ? null : createBorrowTransaction,
             tooltip: 'Borrow / Lend items (adjust stock & due)',
           ),
           const SizedBox(height: 10),
@@ -742,7 +796,7 @@ class _ExchangeDetailPageState extends State<ExchangeDetailPage> {
             heroTag: 'pay',
             backgroundColor: _accent,
             child: const Icon(Icons.payment, color: Colors.black),
-            onPressed: recordPayment,
+            onPressed: _isPaymentDialogOpen ? null : recordPayment,
             tooltip: 'Record payment (cash -> sales + reduce due; non-cash -> reduce due only)',
           ),
         ],

@@ -214,6 +214,7 @@ class _BkashCustomerAccountPageState extends State<BkashCustomerAccountPage> {
     final referenceController = TextEditingController(text: initial?['reference']?.toString() ??  '');
     final noteController = TextEditingController(text: initial?['note']?.toString() ??  '');
     final nameController = TextEditingController(text: initial?['name']?.toString() ??  (type == 'receive' ?  'Receive' : ''));
+    final submitting = ValueNotifier<bool>(false);
 
     await showDialog(
       context: context,
@@ -335,8 +336,15 @@ class _BkashCustomerAccountPageState extends State<BkashCustomerAccountPage> {
               ),
               actions: [
                 TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-                ElevatedButton(
-                  onPressed: () async {
+                ValueListenableBuilder<bool>(
+                  valueListenable: submitting,
+                  builder: (context, isSubmitting, _) {
+                    return ElevatedButton(
+                      onPressed: isSubmitting
+                          ? null
+                          : () async {
+                              submitting.value = true;
+                              try {
                     // parse values
                     final finalAmount = double.tryParse(finalAmountController.text.trim()) ?? 
                         (isSend ?  (double.tryParse(amountController.text.trim()) ??  0.0) : 0.0);
@@ -420,8 +428,19 @@ class _BkashCustomerAccountPageState extends State<BkashCustomerAccountPage> {
 
                     await batch.commit();
                     Navigator.pop(ctx);
+                              } finally {
+                                submitting.value = false;
+                              }
+                            },
+                      child: isSubmitting
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                            )
+                          : Text(docId == null ?  (isSend ?  'Send' : 'Receive') : 'Update'),
+                    );
                   },
-                  child: Text(docId == null ?  (isSend ?  'Send' : 'Receive') : 'Update'),
                 ),
               ],
             ),
@@ -939,29 +958,54 @@ class _BkashCustomerAccountPageState extends State<BkashCustomerAccountPage> {
                                           if (v == 'edit') {
                                             await _openTransactionDialog(accountId: widget.accountId, type: type, mode: mode.isEmpty ?  'account' : mode, docId: doc.id, initial: m);
                                           } else if (v == 'delete') {
-                                            final ok = await showDialog<bool>(
+                                            bool isDeleting = false;
+                                            await showDialog<bool>(
                                               context: context,
                                               builder: (_) => Theme(
                                                 data: _dialogTheme(context),
-                                                child: AlertDialog(
-                                                  backgroundColor: _bgEnd,
-                                                  surfaceTintColor: Colors.transparent,
-                                                  shape: RoundedRectangleBorder(
-                                                    borderRadius: BorderRadius.circular(18),
-                                                    side: BorderSide(color: Colors.white.withOpacity(0.12)),
-                                                  ),
-                                                  title: const Text('Delete transaction? '),
-                                                  content: const Text('This will remove the transaction and adjust account balance.'),
-                                                  actions: [
-                                                    TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                                                    ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
-                                                  ],
+                                                child: StatefulBuilder(
+                                                  builder: (context, setState) {
+                                                    return AlertDialog(
+                                                      backgroundColor: _bgEnd,
+                                                      surfaceTintColor: Colors.transparent,
+                                                      shape: RoundedRectangleBorder(
+                                                        borderRadius: BorderRadius.circular(18),
+                                                        side: BorderSide(color: Colors.white.withOpacity(0.12)),
+                                                      ),
+                                                      title: const Text('Delete transaction? '),
+                                                      content: const Text('This will remove the transaction and adjust account balance.'),
+                                                      actions: [
+                                                        TextButton(
+                                                          onPressed: isDeleting ? null : () => Navigator.pop(context, false),
+                                                          child: const Text('Cancel'),
+                                                        ),
+                                                        ElevatedButton(
+                                                          onPressed: isDeleting
+                                                              ? null
+                                                              : () async {
+                                                                  setState(() => isDeleting = true);
+                                                                  try {
+                                                                    await _deleteTransactionAndReverse(widget.accountId, doc);
+                                                                  } finally {
+                                                                    if (context.mounted) {
+                                                                      Navigator.pop(context, true);
+                                                                    }
+                                                                  }
+                                                                },
+                                                          child: isDeleting
+                                                              ? const SizedBox(
+                                                                  width: 16,
+                                                                  height: 16,
+                                                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                                                )
+                                                              : const Text('Delete'),
+                                                        ),
+                                                      ],
+                                                    );
+                                                  },
                                                 ),
                                               ),
                                             );
-                                            if (ok == true) {
-                                              await _deleteTransactionAndReverse(widget.accountId, doc);
-                                            }
                                           }
                                         },
                                         itemBuilder: (_) => const [

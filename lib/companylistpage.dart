@@ -102,6 +102,48 @@ class _CompanyListPageState extends State<CompanyListPage> {
     return role.toLowerCase().replaceAll(RegExp(r'[\s\-]+'), '_').trim();
   }
 
+  String? _companyIdFromOrderPath(String path) {
+    final parts = path.split('/');
+    for (var i = 0; i < parts.length - 1; i++) {
+      if (parts[i] == 'orders') {
+        return parts[i + 1];
+      }
+    }
+    return null;
+  }
+
+  double _computeFinalFromOrderData(Map<String, dynamic> data) {
+    final fa = data['finalAmount'];
+    if (fa is num) return fa.toDouble();
+    if (fa != null) {
+      final v = double.tryParse(fa.toString());
+      if (v != null) return v;
+    }
+
+    final st = data['subTotal'];
+    if (st is num) return st.toDouble();
+    if (st != null) {
+      final v = double.tryParse(st.toString());
+      if (v != null) return v;
+    }
+
+    final items = data['items'];
+    if (items is List) {
+      double sum = 0.0;
+      for (final it in items) {
+        if (it is Map) {
+          final t = it['total'];
+          if (t is num) sum += t.toDouble();
+        }
+      }
+      if (sum > 0) return sum;
+    }
+
+    final paid = (data['paid'] is num) ? (data['paid'] as num).toDouble() : double.tryParse('${data['paid']}') ?? 0.0;
+    final due = (data['due'] is num) ? (data['due'] as num).toDouble() : double.tryParse('${data['due']}') ?? 0.0;
+    return paid + due;
+  }
+
   bool get _canDelete {
     final nr = _normalizeRole(_currentUserRole);
     return nr == 'admin';
@@ -270,55 +312,90 @@ class _CompanyListPageState extends State<CompanyListPage> {
                         );
                       }
 
-                      return ListView.separated(
-                        padding: const EdgeInsets.only(bottom: 120, top: 8),
-                        itemCount: filtered.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 4),
-                        itemBuilder: (_, i) {
-                          final company = filtered[i];
-                          final companyId = company.toLowerCase().replaceAll(" ", "_");
+                      return StreamBuilder<QuerySnapshot>(
+                        stream: FirebaseFirestore.instance.collectionGroup('orders').snapshots(),
+                        builder: (context, orderSnap) {
+                          final dueMap = <String, double>{};
+                          if (orderSnap.hasData) {
+                            for (final d in orderSnap.data!.docs) {
+                              final data = d.data() as Map<String, dynamic>? ?? {};
+                              var cid = (data['companyId'] ?? '').toString().trim();
+                              if (cid.isEmpty) {
+                                cid = _companyIdFromOrderPath(d.reference.path) ?? '';
+                              }
+                              if (cid.isEmpty) continue;
 
-                          return Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(16),
-                              child: BackdropFilter(
-                                filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withOpacity(0.08),
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(color: Colors.white.withOpacity(0.18)),
-                                  ),
-                                  child: ListTile(
-                                    title: Text(company, style: const TextStyle(color: Colors.white)),
-                                    trailing: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        if (_canDelete)
-                                          IconButton(
-                                            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
-                                            tooltip: 'Delete company',
-                                            onPressed: () => _deleteCompany(company),
-                                          ),
-                                        const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.white70),
-                                      ],
-                                    ),
-                                    onTap: () {
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (_) => CompanyDetailPage(
-                                            companyId: companyId,
-                                            companyName: company,
-                                          ),
+                              final paid = (data['paid'] is num)
+                                  ? (data['paid'] as num).toDouble()
+                                  : double.tryParse('${data['paid']}') ?? 0.0;
+                              final finalAmt = _computeFinalFromOrderData(data);
+                              final due = (data['due'] is num) ? (data['due'] as num).toDouble() : (finalAmt - paid);
+                              if (due <= 0) continue;
+                              dueMap[cid] = (dueMap[cid] ?? 0) + due;
+                            }
+                          }
+
+                          return ListView.separated(
+                            padding: const EdgeInsets.only(bottom: 120, top: 8),
+                            itemCount: filtered.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 4),
+                            itemBuilder: (_, i) {
+                              final company = filtered[i];
+                              final companyId = company.toLowerCase().replaceAll(" ", "_");
+                              final dueAmt = dueMap[companyId] ?? 0.0;
+                              final subtitle = Text(
+                                'Due: \u09F3 ${dueAmt.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  color: dueAmt > 0 ? Colors.redAccent : Colors.white70,
+                                  fontSize: 12,
+                                ),
+                              );
+
+
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(16),
+                                  child: BackdropFilter(
+                                    filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: Colors.white.withOpacity(0.08),
+                                        borderRadius: BorderRadius.circular(16),
+                                        border: Border.all(color: Colors.white.withOpacity(0.18)),
+                                      ),
+                                      child: ListTile(
+                                        title: Text(company, style: const TextStyle(color: Colors.white)),
+                                        subtitle: subtitle,
+                                        trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            if (_canDelete)
+                                              IconButton(
+                                                icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                                                tooltip: 'Delete company',
+                                                onPressed: () => _deleteCompany(company),
+                                              ),
+                                            const Icon(Icons.arrow_forward_ios, size: 16, color: Colors.white70),
+                                          ],
                                         ),
-                                      );
-                                    },
+                                        onTap: () {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) => CompanyDetailPage(
+                                                companyId: companyId,
+                                                companyName: company,
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
                                   ),
                                 ),
-                              ),
-                            ),
+                              );
+                            },
                           );
                         },
                       );

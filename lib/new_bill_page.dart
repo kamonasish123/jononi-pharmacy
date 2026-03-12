@@ -15,6 +15,8 @@ class NewBillPage extends StatefulWidget {
 
 class _NewBillPageState extends State<NewBillPage> {
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
+  bool _isSaving = false;
+  bool _isAdding = false;
 
   final TextEditingController searchController = TextEditingController();
   final TextEditingController qtyController = TextEditingController();
@@ -103,84 +105,117 @@ class _NewBillPageState extends State<NewBillPage> {
   double get due => _round2(subTotal - paid);
 
   // ---------- ADD ITEM ----------
-  void addToBill() {
-    if (selectedMedicine == null || qtyController.text.isEmpty) return;
+  Future<void> addToBill() async {
+    if (_isAdding) return;
+    setState(() => _isAdding = true);
+    try {
+      if (selectedMedicine == null || qtyController.text.isEmpty) return;
 
-    final qty = int.tryParse(qtyController.text);
-    if (qty == null || qty <= 0) return;
+      final qty = int.tryParse(qtyController.text);
+      if (qty == null || qty <= 0) return;
 
-    // SAFE STOCK DEFAULT = 0 and tolerant parsing
-    final rawStock = selectedMedicine!['quantity'] ?? selectedMedicine!['stock'] ?? selectedMedicine!['qty'] ?? 0;
-    final int stock = (rawStock is num) ? rawStock.toInt() : int.tryParse(rawStock.toString()) ?? 0;
+      // SAFE STOCK DEFAULT = 0 and tolerant parsing
+      final rawStock = selectedMedicine!['quantity'] ?? selectedMedicine!['stock'] ?? selectedMedicine!['qty'] ?? 0;
+      final int stock = (rawStock is num) ? rawStock.toInt() : int.tryParse(rawStock.toString()) ?? 0;
 
-    if (qty > stock) {
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text("Stock Error"),
-          content: Text(
-              "Quantity must be less than or equal to stock.\nAvailable stock: $stock"),
-          actions: [
-            TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text("OK"))
-          ],
-        ),
-      );
-      return;
-    }
+      int existingQty = 0;
+      final existingIndex = billItems.indexWhere((it) => it['medicineId'] == selectedMedicineId);
+      if (existingIndex >= 0) {
+        final existingRaw = billItems[existingIndex]['qty'];
+        existingQty = (existingRaw is num) ? existingRaw.toInt() : int.tryParse(existingRaw.toString()) ?? 0;
+      }
 
-    final rawPrice = selectedMedicine!['price'] ?? 0;
-    final double price = _round2((rawPrice is num) ? rawPrice.toDouble() : double.tryParse(rawPrice.toString()) ?? 0.0);
+      if (qty > stock) {
+        await showDialog(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text("Stock Error"),
+            content: Text(
+                "Quantity must be less than or equal to stock.\nAvailable stock: $stock"),
+            actions: [
+              TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("OK"))
+            ],
+          ),
+        );
+        return;
+      }
 
-    setState(() {
-      billItems.add({
-        'medicineId': selectedMedicineId,
-        'name': selectedMedicine!['medicineName'] ?? (selectedMedicine!['medicineNameLower'] ?? ''),
-        'qty': qty,
-        'price': price,
-        'total': _round2(qty * price),
+      final rawPrice = selectedMedicine!['price'] ?? 0;
+      final double price = _round2((rawPrice is num) ? rawPrice.toDouble() : double.tryParse(rawPrice.toString()) ?? 0.0);
+
+      setState(() {
+        if (existingIndex >= 0) {
+          // Replace qty with the latest entered value (so user can increase or reduce)
+          billItems[existingIndex]['qty'] = qty;
+          billItems[existingIndex]['price'] = price;
+          billItems[existingIndex]['total'] = _round2(qty * price);
+        } else {
+          billItems.add({
+            'medicineId': selectedMedicineId,
+            'name': selectedMedicine!['medicineName'] ?? (selectedMedicine!['medicineNameLower'] ?? ''),
+            'qty': qty,
+            'price': price,
+            'total': _round2(qty * price),
+          });
+        }
+
+        selectedMedicine = null;
+        selectedMedicineId = null;
+        searchController.clear();
+        qtyController.clear();
       });
-
-      selectedMedicine = null;
-      selectedMedicineId = null;
-      searchController.clear();
-      qtyController.clear();
-    });
+    } finally {
+      if (mounted) setState(() => _isAdding = false);
+    }
   }
 
   // ---------- SAVE BILL ----------
   Future<void> saveBill() async {
+    if (_isSaving) return;
     if (billItems.isEmpty) return;
 
-    final batch = firestore.batch();
+    setState(() => _isSaving = true);
+    try {
+      final batch = firestore.batch();
 
-    final billRef = firestore
-        .collection('sales')
-        .doc(widget.date)
-        .collection('bills')
-        .doc();
+      final billRef = firestore
+          .collection('sales')
+          .doc(widget.date)
+          .collection('bills')
+          .doc();
 
-    batch.set(billRef, {
-      'items': billItems,
-      'subTotal': subTotal,
-      'paid': paid,
-      'due': due,
-      'createdAt': FieldValue.serverTimestamp(),
-    });
-
-    // REDUCE STOCK SAFELY: update BOTH 'quantity' and 'stock' so all pages stay consistent
-    for (var item in billItems) {
-      final medRef = firestore.collection('medicines').doc(item['medicineId']);
-      batch.update(medRef, {
-        'quantity': FieldValue.increment(-item['qty']),
-        'stock': FieldValue.increment(-item['qty']),
-        'updatedAt': FieldValue.serverTimestamp(),
+      batch.set(billRef, {
+        'items': billItems,
+        'subTotal': subTotal,
+        'paid': paid,
+        'due': due,
+        'createdAt': FieldValue.serverTimestamp(),
       });
-    }
 
-    await batch.commit();
-    Navigator.pop(context);
+      // REDUCE STOCK SAFELY: update BOTH 'quantity' and 'stock' so all pages stay consistent
+      for (var item in billItems) {
+        final medRef = firestore.collection('medicines').doc(item['medicineId']);
+        batch.update(medRef, {
+          'quantity': FieldValue.increment(-item['qty']),
+          'stock': FieldValue.increment(-item['qty']),
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      await batch.commit();
+      if (!mounted) return;
+      Navigator.pop(context);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Save failed: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
     @override
@@ -339,13 +374,19 @@ class _NewBillPageState extends State<NewBillPage> {
                               ),
                               const SizedBox(width: 8),
                               ElevatedButton(
-                                onPressed: addToBill,
+                                onPressed: _isAdding ? null : addToBill,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _accent,
                                   foregroundColor: Colors.black,
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
-                                child: const Text("Add"),
+                                child: _isAdding
+                                    ? const SizedBox(
+                                        width: 16,
+                                        height: 16,
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                      )
+                                    : const Text("Add"),
                               ),
                             ],
                           ),
@@ -417,13 +458,19 @@ class _NewBillPageState extends State<NewBillPage> {
                             SizedBox(
                               width: double.infinity,
                               child: ElevatedButton(
-                                onPressed: saveBill,
+                                onPressed: _isSaving ? null : saveBill,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _accent,
                                   foregroundColor: Colors.black,
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
-                                child: const Text("Save Bill"),
+                                child: _isSaving
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                      )
+                                    : const Text("Save Bill"),
                               ),
                             ),
                           ],

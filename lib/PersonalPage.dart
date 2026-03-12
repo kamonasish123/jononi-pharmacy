@@ -242,7 +242,8 @@ class PersonalCostWidget extends StatefulWidget {
 }
 
 class _PersonalCostWidgetState extends State<PersonalCostWidget> {
-  String get dateString => DateFormat('yyyy-MM-dd').format(DateTime.now());
+  DateTime selectedDate = DateTime.now();
+  String get dateString => DateFormat('yyyy-MM-dd').format(selectedDate);
 
   CollectionReference<Map<String, dynamic>> entriesRef() {
     return widget.firestore.collection('personal_costs').doc(dateString).collection('entries').withConverter(
@@ -251,53 +252,88 @@ class _PersonalCostWidgetState extends State<PersonalCostWidget> {
     );
   }
 
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: selectedDate,
+      firstDate: DateTime(2023),
+      lastDate: DateTime(2100),
+    );
+    if (picked != null) {
+      setState(() => selectedDate = picked);
+    }
+  }
+
   Future<void> _openAddDialog(String type) async {
     final reasonCtrl = TextEditingController();
     final amountCtrl = TextEditingController();
+    bool isSaving = false;
 
     await showDialog(
       context: context,
-      builder: (_) => Theme(
-        data: _dialogTheme(context),
-        child: AlertDialog(
-          backgroundColor: _bgEnd,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: BorderSide(color: Colors.white.withOpacity(0.12)),
-          ),
-          title: Text(type == 'receive' ? 'Receive (add)' : 'Cost (spend)'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(controller: reasonCtrl, decoration: const InputDecoration(labelText: 'Reason')),
-                const SizedBox(height: 8),
-                TextField(controller: amountCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount')),
-              ],
+      builder: (_) => StatefulBuilder(
+        builder: (context, setState) => Theme(
+          data: _dialogTheme(context),
+          child: AlertDialog(
+            backgroundColor: _bgEnd,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: Colors.white.withOpacity(0.12)),
             ),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                final reason = reasonCtrl.text.trim();
-                final amt = double.tryParse(amountCtrl.text.trim()) ?? 0.0;
-                if (amt <= 0) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter valid amount')));
-                  return;
-                }
-                await entriesRef().add({
-                  'type': type,
-                  'reason': reason.isEmpty ? null : reason,
-                  'amount': amt,
-                  'createdAt': FieldValue.serverTimestamp(),
-                });
-                Navigator.pop(context);
-              },
-              child: const Text('Save'),
+            title: Text(type == 'receive' ? 'Receive (add)' : 'Cost (spend)'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(controller: reasonCtrl, decoration: const InputDecoration(labelText: 'Reason')),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Amount'),
+                  ),
+                ],
+              ),
             ),
-          ],
+            actions: [
+              TextButton(
+                onPressed: isSaving ? null : () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        if (isSaving) return;
+                        setState(() => isSaving = true);
+                        try {
+                          final reason = reasonCtrl.text.trim();
+                          final amt = double.tryParse(amountCtrl.text.trim()) ?? 0.0;
+                          if (amt <= 0) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter valid amount')));
+                            return;
+                          }
+                          await entriesRef().add({
+                            'type': type,
+                            'reason': reason.isEmpty ? null : reason,
+                            'amount': amt,
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+                          if (!context.mounted) return;
+                          Navigator.pop(context);
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save: $e')));
+                        } finally {
+                          if (!context.mounted) return;
+                          setState(() => isSaving = false);
+                        }
+                      },
+                child: Text(isSaving ? 'Saving...' : 'Save'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -345,6 +381,11 @@ class _PersonalCostWidgetState extends State<PersonalCostWidget> {
                             style: const TextStyle(color: Colors.white70),
                             overflow: TextOverflow.ellipsis,
                           ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.calendar_today, color: Colors.white70, size: 18),
+                          onPressed: _pickDate,
+                          tooltip: 'Pick date',
                         ),
                         const SizedBox(width: 8),
                         Column(
@@ -482,6 +523,7 @@ class EmployeeListWidget extends StatefulWidget {
 
 class _EmployeeListWidgetState extends State<EmployeeListWidget> {
   String _search = '';
+  bool _isDeletingEmployee = false;
 
   Stream<QuerySnapshot> _employeesStream() {
     final col = widget.firestore.collection('employees').orderBy('nameLower');
@@ -492,81 +534,126 @@ class _EmployeeListWidgetState extends State<EmployeeListWidget> {
 
   Future<void> _addEmployeeDialog() async {
     final ctrl = TextEditingController();
+    bool isCreating = false;
     await showDialog(
       context: context,
-      builder: (_) => Theme(
-        data: _dialogTheme(context),
-        child: AlertDialog(
-          backgroundColor: _bgEnd,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: BorderSide(color: Colors.white.withOpacity(0.12)),
-          ),
-          title: const Text('Add Employee'),
-          content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'Name')),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () async {
-                final name = ctrl.text.trim();
-                if (name.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Type a name')));
-                  return;
-                }
-                final lower = name.toLowerCase();
-                final existing = await widget.firestore.collection('employees').where('nameLower', isEqualTo: lower).limit(1).get();
-                if (existing.docs.isNotEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Employee already exists')));
-                  // select existing? we just notify
-                  return;
-                }
-                await widget.firestore.collection('employees').add({
-                  'name': name,
-                  'nameLower': lower,
-                  'createdAt': FieldValue.serverTimestamp(),
-                });
-                Navigator.pop(context);
-              },
-              child: const Text('Create'),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setState) => Theme(
+          data: _dialogTheme(context),
+          child: AlertDialog(
+            backgroundColor: _bgEnd,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: Colors.white.withOpacity(0.12)),
             ),
-          ],
+            title: const Text('Add Employee'),
+            content: TextField(controller: ctrl, decoration: const InputDecoration(labelText: 'Name')),
+            actions: [
+              TextButton(
+                onPressed: isCreating ? null : () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: isCreating
+                    ? null
+                    : () async {
+                        if (isCreating) return;
+                        setState(() => isCreating = true);
+                        try {
+                          final name = ctrl.text.trim();
+                          if (name.isEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Type a name')));
+                            return;
+                          }
+                          final lower = name.toLowerCase();
+                          final existing = await widget.firestore.collection('employees').where('nameLower', isEqualTo: lower).limit(1).get();
+                          if (existing.docs.isNotEmpty) {
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Employee already exists')));
+                            // select existing? we just notify
+                            return;
+                          }
+                          await widget.firestore.collection('employees').add({
+                            'name': name,
+                            'nameLower': lower,
+                            'createdAt': FieldValue.serverTimestamp(),
+                          });
+                          if (!context.mounted) return;
+                          Navigator.pop(context);
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to create employee: $e')));
+                        } finally {
+                          if (!context.mounted) return;
+                          setState(() => isCreating = false);
+                        }
+                      },
+                child: Text(isCreating ? 'Creating...' : 'Create'),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 
   Future<void> _deleteEmployee(DocumentSnapshot doc) async {
+    if (_isDeletingEmployee) return;
+    bool isConfirming = false;
     final ok = await showDialog<bool>(
       context: context,
-      builder: (_) => Theme(
-        data: _dialogTheme(context),
-        child: AlertDialog(
-          backgroundColor: _bgEnd,
-          surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-            side: BorderSide(color: Colors.white.withOpacity(0.12)),
+      builder: (_) => StatefulBuilder(
+        builder: (context, setState) => Theme(
+          data: _dialogTheme(context),
+          child: AlertDialog(
+            backgroundColor: _bgEnd,
+            surfaceTintColor: Colors.transparent,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(18),
+              side: BorderSide(color: Colors.white.withOpacity(0.12)),
+            ),
+            title: const Text('Delete employee?'),
+            content: const Text('This will delete the employee and all their attendance records.'),
+            actions: [
+              TextButton(
+                onPressed: isConfirming ? null : () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: isConfirming
+                    ? null
+                    : () {
+                        if (isConfirming) return;
+                        setState(() => isConfirming = true);
+                        Navigator.pop(context, true);
+                      },
+                child: Text(isConfirming ? 'Deleting...' : 'Delete'),
+              ),
+            ],
           ),
-          title: const Text('Delete employee?'),
-          content: const Text('This will delete the employee and all their attendance records.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Delete')),
-          ],
         ),
       ),
     );
     if (ok != true) return;
-    final id = doc.id;
-    final batch = widget.firestore.batch();
-    final empRef = widget.firestore.collection('employees').doc(id);
-    // delete attendance docs (iterate)
-    final attSnap = await empRef.collection('attendance').get();
-    for (final a in attSnap.docs) batch.delete(a.reference);
-    batch.delete(empRef);
-    await batch.commit();
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Employee removed')));
+    setState(() => _isDeletingEmployee = true);
+    try {
+      final id = doc.id;
+      final batch = widget.firestore.batch();
+      final empRef = widget.firestore.collection('employees').doc(id);
+      // delete attendance docs (iterate)
+      final attSnap = await empRef.collection('attendance').get();
+      for (final a in attSnap.docs) batch.delete(a.reference);
+      batch.delete(empRef);
+      await batch.commit();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Employee removed')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete employee: $e')));
+    } finally {
+      if (!mounted) return;
+      setState(() => _isDeletingEmployee = false);
+    }
   }
 
   @override
@@ -679,6 +766,8 @@ class EmployeeAttendancePage extends StatefulWidget {
 class _EmployeeAttendancePageState extends State<EmployeeAttendancePage> {
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
   DateTime selectedDate = DateTime.now();
+  bool _isStarting = false;
+  bool _isStopping = false;
   static const Color _bgStart = Color(0xFF041A14);
   static const Color _bgEnd = Color(0xFF0E5A42);
   static const Color _accent = Color(0xFFFFD166);
@@ -749,20 +838,45 @@ class _EmployeeAttendancePageState extends State<EmployeeAttendancePage> {
   }
 
   Future<void> _startSession() async {
-    // create attendance doc with startAt (endAt null)
-    final now = DateTime.now();
-    await attendanceCol().add({
-      'startAt': Timestamp.fromDate(now),
-      'endAt': null,
-      'durationMinutes': null,
-      'createdAt': FieldValue.serverTimestamp(),
-      'date': dateString,
-    });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Started session')));
+    if (_isStarting || _isStopping) return;
+    setState(() => _isStarting = true);
+    try {
+      // avoid starting if a session is already running for this date
+      final q = await attendanceCol().orderBy('startAt', descending: true).limit(50).get();
+      for (final d in q.docs) {
+        final m = d.data() as Map<String, dynamic>? ?? {};
+        final docDate = (m['date'] ?? '').toString();
+        if (m['endAt'] == null && docDate == dateString) {
+          if (!mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Session already running')));
+          return;
+        }
+      }
+
+      // create attendance doc with startAt (endAt null)
+      final now = DateTime.now();
+      await attendanceCol().add({
+        'startAt': Timestamp.fromDate(now),
+        'endAt': null,
+        'durationMinutes': null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'date': dateString,
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Started session')));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to start session: $e')));
+    } finally {
+      if (!mounted) return;
+      setState(() => _isStarting = false);
+    }
   }
 
   Future<void> _stopSession() async {
     // find last open session (endAt == null) and update it
+    if (_isStopping || _isStarting) return;
+    setState(() => _isStopping = true);
     try {
       // fetch recent sessions and find the first one that's still open for the selected date
       final q = await attendanceCol().orderBy('startAt', descending: true).limit(50).get();
@@ -793,9 +907,14 @@ class _EmployeeAttendancePageState extends State<EmployeeAttendancePage> {
         'durationMinutes': minutes,
         'updatedAt': FieldValue.serverTimestamp(),
       });
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Stopped — $minutes minutes')));
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to stop session: $e')));
+    } finally {
+      if (!mounted) return;
+      setState(() => _isStopping = false);
     }
   }
 
@@ -854,25 +973,38 @@ class _EmployeeAttendancePageState extends State<EmployeeAttendancePage> {
       ),
       floatingActionButton: SafeArea(
         minimum: const EdgeInsets.only(bottom: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            FloatingActionButton.extended(
-              heroTag: 'start',
-              backgroundColor: Colors.green,
-              onPressed: _startSession,
-              label: const Text('START (Left)'),
-              icon: const Icon(Icons.play_arrow),
-            ),
-            const SizedBox(height: 10),
-            FloatingActionButton.extended(
-              heroTag: 'stop',
-              backgroundColor: Colors.orange,
-              onPressed: _stopSession,
-              label: const Text('STOP (Returned)'),
-              icon: const Icon(Icons.stop),
-            ),
-          ],
+        child: StreamBuilder<QuerySnapshot>(
+          stream: attendanceForDayStream(),
+          builder: (context, snap) {
+            final docs = snap.data?.docs ?? [];
+            final hasOpenSession = docs.any((d) {
+              final m = d.data() as Map<String, dynamic>? ?? {};
+              return m['endAt'] == null;
+            });
+            final showStop = hasOpenSession || _isStarting;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (!showStop)
+                  FloatingActionButton.extended(
+                    heroTag: 'start',
+                    backgroundColor: Colors.green,
+                    onPressed: _isStarting ? null : _startSession,
+                    label: const Text('START (Left)'),
+                    icon: const Icon(Icons.play_arrow),
+                  ),
+                if (showStop) ...[
+                  FloatingActionButton.extended(
+                    heroTag: 'stop',
+                    backgroundColor: Colors.orange,
+                    onPressed: (_isStopping || _isStarting || !hasOpenSession) ? null : _stopSession,
+                    label: Text(_isStopping ? 'STOPPING...' : 'STOP (Returned)'),
+                    icon: const Icon(Icons.stop),
+                  ),
+                ],
+              ],
+            );
+          },
         ),
       ),
       body: Stack(

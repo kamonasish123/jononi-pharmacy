@@ -24,6 +24,7 @@ class _EditBillPageState extends State<EditBillPage> {
   late List<Map<String, dynamic>> originalItems; // keep original for diff
   late TextEditingController paidController;
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
+  bool _isSaving = false;
   static const Color _bgStart = Color(0xFF041A14);
   static const Color _bgEnd = Color(0xFF0E5A42);
   static const Color _accent = Color(0xFFFFD166);
@@ -292,8 +293,11 @@ class _EditBillPageState extends State<EditBillPage> {
   }
 
   Future<void> saveChanges() async {
-    // Build map of medId -> delta (newQty - oldQty)
-    final Map<String, int> deltaByMed = {};
+    if (_isSaving) return;
+    setState(() => _isSaving = true);
+    try {
+      // Build map of medId -> delta (newQty - oldQty)
+      final Map<String, int> deltaByMed = {};
 
     // accumulate new items by medId (sum qty if duplicates)
     final Map<String, int> newQtyByMed = {};
@@ -415,6 +419,9 @@ class _EditBillPageState extends State<EditBillPage> {
       final errMsg = e.toString();
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Save failed: $errMsg")));
     }
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
   }
 
     @override
@@ -513,13 +520,19 @@ class _EditBillPageState extends State<EditBillPage> {
                             SizedBox(
                               width: double.infinity,
                               child: ElevatedButton(
-                                onPressed: saveChanges,
+                                onPressed: _isSaving ? null : saveChanges,
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: _accent,
                                   foregroundColor: Colors.black,
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                 ),
-                                child: const Text("Save Changes"),
+                                child: _isSaving
+                                    ? const SizedBox(
+                                        width: 18,
+                                        height: 18,
+                                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                                      )
+                                    : const Text("Save Changes"),
                               ),
                             ),
                           ],

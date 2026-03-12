@@ -178,6 +178,16 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// Pull-to-refresh handler for homepage
+  Future<void> _refreshHome() async {
+    await Future.wait([
+      fetchCurrentUserRole(),
+      loadUserProfile(),
+    ]);
+    if (!mounted) return;
+    setState(() {});
+  }
+
   /// Normalize role strings to a canonical form:
   /// - lowercased
   /// - spaces/hyphens collapsed to underscores
@@ -1443,20 +1453,25 @@ class _HomePageState extends State<HomePage> {
                       // If search text is non-empty, show medicine search results (name, price, stock).
                       // Otherwise show the original Menu Grid (unchanged).
                       Expanded(
-                        child: topSearchController.text.trim().isNotEmpty
-                            ? _buildMedicineSearchResults(topSearchController.text.trim())
-                            : GridView.count(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          primary: false,
-                          crossAxisCount: 3,
-                          mainAxisSpacing: 12,
-                          crossAxisSpacing: 10,
-                          childAspectRatio: 0.95,
-                          children: [
-                            // Sell
-                            InkWell(
-                              onTap: () {
-                                if (!localCanAccess('sell')) {
+                        child: RefreshIndicator(
+                          color: _accent,
+                          backgroundColor: _bgEnd,
+                          onRefresh: _refreshHome,
+                          child: topSearchController.text.trim().isNotEmpty
+                              ? _buildMedicineSearchResults(topSearchController.text.trim())
+                              : GridView.count(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            primary: false,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            crossAxisCount: 3,
+                            mainAxisSpacing: 12,
+                            crossAxisSpacing: 10,
+                            childAspectRatio: 0.95,
+                            children: [
+                              // Sell
+                              InkWell(
+                                onTap: () {
+                                  if (!localCanAccess('sell')) {
                                   _showAccessDeniedDialog('Sell');
                                   return;
                                 }
@@ -1588,7 +1603,8 @@ class _HomePageState extends State<HomePage> {
                                 ),
                               );
                             }),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ],
@@ -1712,6 +1728,7 @@ class _HomePageState extends State<HomePage> {
 
         return ListView.separated(
           padding: const EdgeInsets.only(bottom: 120),
+          physics: const AlwaysScrollableScrollPhysics(),
           itemCount: resultsList.length,
           separatorBuilder: (_, __) => const Divider(color: Colors.white24),
           itemBuilder: (_, i) {

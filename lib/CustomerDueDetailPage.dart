@@ -66,6 +66,8 @@ class _CustomerDueDetailPageState extends State<CustomerDueDetailPage> {
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
   double totalDue = 0.0;
   double balance = 0.0;
+  bool _isEntryDialogOpen = false;
+  bool _isAccountDialogOpen = false;
 
   @override
   void initState() {
@@ -148,8 +150,12 @@ class _CustomerDueDetailPageState extends State<CustomerDueDetailPage> {
   // If adding due: check existing balance first and consume it, remaining becomes totalDue.
   // If adding payment: reduce totalDue; if payment > totalDue, excess becomes balance.
   Future<void> addEntry(bool isPayment) async {
+    if (_isEntryDialogOpen) return;
+    setState(() => _isEntryDialogOpen = true);
     final controller = TextEditingController();
-    await showDialog(
+    final submitting = ValueNotifier<bool>(false);
+    try {
+      await showDialog(
       context: context,
       builder: (_) => Theme(
         data: _dialogTheme(context),
@@ -168,8 +174,15 @@ class _CustomerDueDetailPageState extends State<CustomerDueDetailPage> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
-            ElevatedButton(
-              onPressed: () async {
+            ValueListenableBuilder<bool>(
+              valueListenable: submitting,
+              builder: (context, isSubmitting, _) {
+                return ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          submitting.value = true;
+                          try {
                 final amount = double.tryParse(controller.text);
                 if (amount == null || amount <= 0) {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter valid amount")));
@@ -320,20 +333,38 @@ class _CustomerDueDetailPageState extends State<CustomerDueDetailPage> {
                 } catch (e) {
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Operation failed: $e")));
                 }
+                          } finally {
+                            submitting.value = false;
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                        )
+                      : const Text("Submit"),
+                );
               },
-              child: const Text("Submit"),
             ),
           ],
         ),
       ),
     );
+    } finally {
+      if (mounted) setState(() => _isEntryDialogOpen = false);
+    }
   }
 
   // ---------------- Add Account (new) ----------------
   // Deposit money to customer's account: first reduces totalDue (if any), remaining becomes balance.
   Future<void> addAccount() async {
+    if (_isAccountDialogOpen) return;
+    setState(() => _isAccountDialogOpen = true);
     final controller = TextEditingController();
-    await showDialog(
+    final submitting = ValueNotifier<bool>(false);
+    try {
+      await showDialog(
       context: context,
       builder: (_) => Theme(
         data: _dialogTheme(context),
@@ -352,8 +383,15 @@ class _CustomerDueDetailPageState extends State<CustomerDueDetailPage> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
-            ElevatedButton(
-              onPressed: () async {
+            ValueListenableBuilder<bool>(
+              valueListenable: submitting,
+              builder: (context, isSubmitting, _) {
+                return ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          submitting.value = true;
+                          try {
                 final amount = double.tryParse(controller.text);
                 if (amount == null || amount <= 0) {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Enter valid amount")));
@@ -424,13 +462,27 @@ class _CustomerDueDetailPageState extends State<CustomerDueDetailPage> {
                 } catch (e) {
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
                 }
+                          } finally {
+                            submitting.value = false;
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                        )
+                      : const Text("Submit"),
+                );
               },
-              child: const Text("Submit"),
             ),
           ],
         ),
       ),
     );
+    } finally {
+      if (mounted) setState(() => _isAccountDialogOpen = false);
+    }
   }
 
   @override
